@@ -1,0 +1,9 @@
+# Artefakty budowania Cargo (regenerowane przez `cargo build`)
+target/
+
+# Backupy edytorów
+*.orig
+*.bak
+
+# Windows
+Thumbs.db
