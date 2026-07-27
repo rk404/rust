@@ -1,9 +1,15 @@
 # Artefakty budowania Cargo (regenerowane przez `cargo build`)
 target/
 
+# macOS .app bundle (pakowany recznie z binarki release)
+QRGen.app/
+
 # Backupy edytorów
 *.orig
 *.bak
 
 # Windows
 Thumbs.db
+
+# macOS
+.DS_Store
