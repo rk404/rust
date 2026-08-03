@@ -1,8 +1,12 @@
 use crate::qr_logic::{self, Options};
 use eframe::egui;
 use qrcode::EcLevel;
-use std::{fs, path::PathBuf};
+use std::process::Command;
 use std::time::{Duration, Instant};
+use std::{fs, path::PathBuf};
+
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 
 const SIDE_BY_SIDE_MIN_WIDTH: f32 = 680.0;
 const PREVIEW_MIN_SIZE: f32 = 220.0;
@@ -52,6 +56,40 @@ impl StoredSettings {
     }
 }
 
+fn open_output_directory(output_path: &str) -> Result<(), String> {
+    let path = PathBuf::from(output_path);
+    let dir = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+
+    #[cfg(windows)]
+    {
+        Command::new("explorer")
+            .arg(dir)
+            .spawn()
+            .map_err(|e| format!("Nie udało się otworzyć katalogu: {e}"))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(dir)
+            .spawn()
+            .map_err(|e| format!("Nie udało się otworzyć katalogu: {e}"))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("xdg-open")
+            .arg(dir)
+            .spawn()
+            .map_err(|e| format!("Nie udało się otworzyć katalogu: {e}"))?;
+    }
+
+    Ok(())
+}
+
 fn settings_path() -> Option<PathBuf> {
     #[cfg(windows)]
     {
@@ -99,6 +137,131 @@ fn resolve_full_path(path: &str) -> String {
     std::env::current_dir()
         .map(|dir| dir.join(&candidate).display().to_string())
         .unwrap_or_else(|_| candidate.display().to_string())
+}
+
+fn resolved_output_path(output_path: &str) -> PathBuf {
+    let candidate = PathBuf::from(output_path);
+    if candidate.is_absolute() {
+        candidate
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(candidate)
+    }
+}
+
+fn open_output_file(output_path: &str) -> Result<(), String> {
+    let path = resolved_output_path(output_path);
+    if !path.exists() {
+        return Err("Plik wyjściowy nie istnieje. Najpierw wygeneruj kod QR.".to_string());
+    }
+
+    #[cfg(windows)]
+    {
+        Command::new("explorer")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Nie udało się otworzyć pliku: {e}"))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Nie udało się otworzyć pliku: {e}"))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("xdg-open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Nie udało się otworzyć pliku: {e}"))?;
+    }
+
+    Ok(())
+}
+
+fn print_output_file(output_path: &str) -> Result<(), String> {
+    let path = resolved_output_path(output_path);
+    if !path.exists() {
+        return Err("Plik wyjściowy nie istnieje. Najpierw wygeneruj kod QR.".to_string());
+    }
+
+    #[cfg(windows)]
+    {
+        let escaped_path = path.display().to_string().replace('"', "''");
+        let script = format!(
+            r#"
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName System.Windows.Forms
+$path = [System.IO.Path]::GetFullPath('{escaped_path}')
+if (-not (Test-Path -LiteralPath $path)) {{ throw 'Plik nie istnieje.' }}
+$img = [System.Drawing.Image]::FromFile($path)
+try {{
+    $doc = New-Object System.Drawing.Printing.PrintDocument
+    $doc.DocumentName = [System.IO.Path]::GetFileName($path)
+    $doc.Add_PrintPage({{
+        param($sender, $e)
+        $e.Graphics.DrawImage($img, 0, 0, $e.PageBounds.Width, $e.PageBounds.Height)
+    }})
+
+    $printDialog = New-Object System.Windows.Forms.PrintDialog
+    $printDialog.UseEXDialog = $true
+    $printDialog.Document = $doc
+    if ($printDialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) {{
+        exit 0
+    }}
+
+    $doc.Print()
+}} finally {{
+    if ($img) {{ $img.Dispose() }}
+}}
+"#
+        );
+
+        let _child = Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-NoLogo",
+                "-Sta",
+                "-WindowStyle",
+                "Hidden",
+                "-Command",
+                &script,
+            ])
+            .creation_flags(0x08000000)
+            .spawn()
+            .map_err(|e| format!("Nie udało się uruchomić drukowania: {e}"))?;
+
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg("-a")
+            .arg("Preview")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Nie udało się uruchomić drukowania: {e}"))?;
+
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("xdg-open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Nie udało się uruchomić drukowania: {e}"))?;
+
+        Ok(())
+    }
 }
 
 fn encode_hex(text: &str) -> String {
@@ -187,7 +350,8 @@ fn load_settings() -> Option<StoredSettings> {
 }
 
 fn save_settings(settings: &StoredSettings) -> Result<(), String> {
-    let path = settings_path().ok_or_else(|| "nie udalo sie wyznaczyc sciezki ustawien".to_string())?;
+    let path =
+        settings_path().ok_or_else(|| "nie udalo sie wyznaczyc sciezki ustawien".to_string())?;
 
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
@@ -324,8 +488,8 @@ fn solarized_visuals(light: bool) -> egui::Visuals {
 pub fn run_gui(opts: Options, has_data: bool) {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([920.0, 660.0])
-            .with_min_inner_size([600.0, 460.0]),
+            .with_inner_size([1040.0, 720.0])
+            .with_min_inner_size([900.0, 560.0]),
         ..Default::default()
     };
 
@@ -350,6 +514,7 @@ struct QrGenApp {
     back: [u8; 3],
     status: String,
     preview: Option<egui::TextureHandle>,
+    preview_is_current: bool,
     system_theme_light: bool,
     last_theme_check: Instant,
     theme_mode: ThemeMode,
@@ -383,6 +548,7 @@ impl QrGenApp {
                 back: opts.back,
                 status: "Wczytano zapisane ustawienia uzytkownika.".to_string(),
                 preview: None,
+                preview_is_current: false,
                 system_theme_light,
                 last_theme_check: Instant::now(),
                 theme_mode: ThemeMode::Auto,
@@ -406,6 +572,7 @@ impl QrGenApp {
                 back: defaults.back,
                 status: String::new(),
                 preview: None,
+                preview_is_current: false,
                 system_theme_light,
                 last_theme_check: Instant::now(),
                 theme_mode: ThemeMode::Auto,
@@ -435,7 +602,9 @@ impl QrGenApp {
     // Sledzi motyw systemowy (co 2s), gdy uzytkownik nie wybral recznie Light/Dark,
     // i aplikuje paleta Solarized za kazdym razem, gdy efektywny motyw sie zmieni.
     fn sync_theme(&mut self, ctx: &egui::Context) {
-        if self.theme_mode == ThemeMode::Auto && self.last_theme_check.elapsed() >= Duration::from_secs(2) {
+        if self.theme_mode == ThemeMode::Auto
+            && self.last_theme_check.elapsed() >= Duration::from_secs(2)
+        {
             self.system_theme_light = windows_uses_light_theme();
             self.last_theme_check = Instant::now();
         }
@@ -499,6 +668,11 @@ impl QrGenApp {
         }
     }
 
+    fn invalidate_preview(&mut self) {
+        self.preview = None;
+        self.preview_is_current = false;
+    }
+
     fn copy_data_to_clipboard(&mut self, ctx: &egui::Context) {
         if self.data.trim().is_empty() {
             self.status = "Brak danych do skopiowania.".to_string();
@@ -549,23 +723,29 @@ impl QrGenApp {
             Ok(img) => {
                 let size = [img.width() as usize, img.height() as usize];
                 let color_image = egui::ColorImage::from_rgb(size, img.as_raw());
-                self.preview = Some(ctx.load_texture(
+                let preview_texture = ctx.load_texture(
                     "qr_preview",
                     color_image,
                     egui::TextureOptions::NEAREST,
-                ));
+                );
 
                 match img.save(&opts.output) {
                     Ok(()) => {
+                        self.preview = Some(preview_texture);
+                        self.preview_is_current = true;
                         let full_path = fs::canonicalize(&opts.output)
                             .map(|p| p.display().to_string())
                             .unwrap_or_else(|_| resolve_full_path(&opts.output));
                         self.status = format!("Zapisano: {full_path}");
                     }
-                    Err(e) => self.status = format!("Blad zapisu pliku: {e}"),
+                    Err(e) => {
+                        self.invalidate_preview();
+                        self.status = format!("Blad zapisu pliku: {e}");
+                    }
                 }
             }
             Err(e) => {
+                self.invalidate_preview();
                 self.status = format!("Blad: {e}");
             }
         }
@@ -579,6 +759,7 @@ impl QrGenApp {
         self.ecc = defaults.ecc;
         self.fill = defaults.fill;
         self.back = defaults.back;
+        self.invalidate_preview();
         self.status = "Przywrocono domyslny wyglad kodu.".to_string();
     }
 
@@ -607,6 +788,7 @@ impl QrGenApp {
         }
         if let Some(path) = dialog.save_file() {
             self.output = path.display().to_string();
+            self.invalidate_preview();
         }
     }
 
@@ -623,14 +805,18 @@ impl QrGenApp {
                     .clicked()
                 {
                     self.data.clear();
+                    self.invalidate_preview();
                     self.status = "Wyczyszczono dane do zakodowania.".to_string();
                 }
             });
             let width = ui.available_width().max(240.0);
-            ui.add_sized(
+            let response = ui.add_sized(
                 [width, 84.0],
                 egui::TextEdit::multiline(&mut self.data).desired_rows(3),
             );
+            if response.changed() {
+                self.invalidate_preview();
+            }
         });
 
         ui.add_space(10.0);
@@ -639,7 +825,13 @@ impl QrGenApp {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 let output_width = (ui.available_width() - 102.0).max(120.0);
-                ui.add_sized([output_width, 26.0], egui::TextEdit::singleline(&mut self.output));
+                let output_response = ui.add_sized(
+                    [output_width, 26.0],
+                    egui::TextEdit::singleline(&mut self.output),
+                );
+                if output_response.changed() {
+                    self.invalidate_preview();
+                }
                 if ui.button("Przegladaj...").clicked() {
                     self.browse_output();
                 }
@@ -671,29 +863,54 @@ impl QrGenApp {
                 .spacing([12.0, 8.0])
                 .show(ui, |ui| {
                     ui.label("Skala:");
-                    ui.add_sized([120.0, 24.0], egui::TextEdit::singleline(&mut self.scale_text));
+                    let scale_response = ui.add_sized(
+                        [120.0, 24.0],
+                        egui::TextEdit::singleline(&mut self.scale_text),
+                    );
+                    if scale_response.changed() {
+                        self.invalidate_preview();
+                    }
                     ui.end_row();
 
                     ui.label("Ramka:");
-                    ui.add_sized([120.0, 24.0], egui::TextEdit::singleline(&mut self.border_text));
+                    let border_response = ui.add_sized(
+                        [120.0, 24.0],
+                        egui::TextEdit::singleline(&mut self.border_text),
+                    );
+                    if border_response.changed() {
+                        self.invalidate_preview();
+                    }
                     ui.end_row();
 
                     ui.label("Korekcja bledow:");
-                    egui::ComboBox::from_id_salt("ecc_combo")
+                    let ecc_response = egui::ComboBox::from_id_salt("ecc_combo")
                         .selected_text(qr_logic::ecc_to_letter(self.ecc))
                         .show_ui(ui, |ui| {
                             for level in [EcLevel::L, EcLevel::M, EcLevel::Q, EcLevel::H] {
-                                ui.selectable_value(&mut self.ecc, level, qr_logic::ecc_to_letter(level));
+                                ui.selectable_value(
+                                    &mut self.ecc,
+                                    level,
+                                    qr_logic::ecc_to_letter(level),
+                                );
                             }
                         });
+                    if ecc_response.response.changed() {
+                        self.invalidate_preview();
+                    }
                     ui.end_row();
 
                     ui.label("Kolor kodu:");
-                    ui.color_edit_button_srgb(&mut self.fill);
+                    let fill_response = ui.color_edit_button_srgb(&mut self.fill);
+                    if fill_response.changed() {
+                        self.invalidate_preview();
+                    }
                     ui.end_row();
 
                     ui.label("Kolor tla:");
-                    ui.color_edit_button_srgb(&mut self.back);
+                    let back_response = ui.color_edit_button_srgb(&mut self.back);
+                    if back_response.changed() {
+                        self.invalidate_preview();
+                    }
                     ui.end_row();
                 });
         });
@@ -702,28 +919,93 @@ impl QrGenApp {
         ui.group(|ui| {
             ui.label("Akcje:");
             ui.add_space(4.0);
-            ui.horizontal_wrapped(|ui| {
-                if ui
-                    .add_sized([130.0, 36.0], egui::Button::new("Generuj"))
-                    .clicked()
-                {
-                    self.generate(ui.ctx());
-                }
+            egui::Grid::new("action_buttons")
+                .num_columns(3)
+                .spacing([8.0, 8.0])
+                .show(ui, |ui| {
+                    let button_width = 138.0;
+                    let button_height = 34.0;
 
-                if ui
-                    .add_sized([130.0, 36.0], egui::Button::new("Kopiuj dane"))
-                    .clicked()
-                {
-                    self.copy_data_to_clipboard(ui.ctx());
-                }
+                    if ui
+                        .add_sized(
+                            [button_width, button_height],
+                            egui::Button::new(egui::RichText::new("Generuj").size(15.0)),
+                        )
+                        .clicked()
+                    {
+                        self.generate(ui.ctx());
+                    }
 
-                if ui
-                    .add_sized([130.0, 36.0], egui::Button::new("Kopiuj obraz"))
-                    .clicked()
-                {
-                    self.copy_image_to_clipboard();
-                }
-            });
+                    if ui
+                        .add_sized(
+                            [button_width, button_height],
+                            egui::Button::new(egui::RichText::new("Kopiuj dane").size(15.0)),
+                        )
+                        .clicked()
+                    {
+                        self.copy_data_to_clipboard(ui.ctx());
+                    }
+
+                    if ui
+                        .add_sized(
+                            [button_width, button_height],
+                            egui::Button::new(egui::RichText::new("Kopiuj obraz").size(15.0)),
+                        )
+                        .clicked()
+                    {
+                        self.copy_image_to_clipboard();
+                    }
+
+                    ui.end_row();
+
+                    if ui
+                        .add_sized(
+                            [button_width, button_height],
+                            egui::Button::new(egui::RichText::new("Otwórz folder").size(15.0)),
+                        )
+                        .clicked()
+                    {
+                        match open_output_directory(&self.output) {
+                            Ok(()) => self.status = "Otwarto katalog z plikiem.".to_string(),
+                            Err(e) => self.status = e,
+                        }
+                    }
+
+                    let can_open_or_print = self.preview_is_current;
+
+                    let open_button = egui::Button::new(egui::RichText::new("Otwórz plik").size(15.0))
+                        .min_size(egui::vec2(button_width, button_height));
+                    if ui
+                        .add_enabled(can_open_or_print, open_button)
+                        .clicked()
+                    {
+                        match open_output_file(&self.output) {
+                            Ok(()) => {
+                                self.status =
+                                    format!("Otwarto plik: {}", resolve_full_path(&self.output))
+                            }
+                            Err(e) => self.status = e,
+                        }
+                    }
+
+                    let print_button = egui::Button::new(egui::RichText::new("Drukuj").size(15.0))
+                        .min_size(egui::vec2(button_width, button_height));
+                    if ui
+                        .add_enabled(can_open_or_print, print_button)
+                        .clicked()
+                    {
+                        self.generate(ui.ctx());
+                        match print_output_file(&self.output) {
+                            Ok(()) => {
+                                self.status = format!(
+                                    "Wysłano zadanie drukowania: {}",
+                                    resolve_full_path(&self.output)
+                                )
+                            }
+                            Err(e) => self.status = e,
+                        }
+                    }
+                });
         });
 
         self.form_content_height = (ui.cursor().top() - content_top).max(0.0);
@@ -759,7 +1041,7 @@ impl QrGenApp {
                     .add_sized([clear_width, 20.0], egui::Button::new("Wyczysc"))
                     .clicked()
                 {
-                    self.preview = None;
+                    self.invalidate_preview();
                     self.status = "Wyczyszczono podglad wygenerowanego kodu.".to_string();
                 }
             },
@@ -802,7 +1084,11 @@ impl eframe::App for QrGenApp {
                             ThemeMode::Dark => "Motyw: Ciemny",
                         })
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut self.theme_mode, ThemeMode::Auto, "Auto (system)");
+                            ui.selectable_value(
+                                &mut self.theme_mode,
+                                ThemeMode::Auto,
+                                "Auto (system)",
+                            );
                             ui.selectable_value(&mut self.theme_mode, ThemeMode::Light, "Jasny");
                             ui.selectable_value(&mut self.theme_mode, ThemeMode::Dark, "Ciemny");
                         });
@@ -821,6 +1107,27 @@ impl eframe::App for QrGenApp {
                 }
             });
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolved_output_path_keeps_absolute_path() {
+        let absolute = PathBuf::from(r"C:\temp\qr.png");
+        assert_eq!(
+            resolved_output_path(&absolute.display().to_string()),
+            absolute
+        );
+    }
+
+    #[test]
+    fn resolved_output_path_joins_relative_path() {
+        let relative = "qr.png";
+        let resolved = resolved_output_path(relative);
+        assert!(resolved.ends_with("qr.png"));
     }
 }
 

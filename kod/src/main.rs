@@ -66,7 +66,12 @@ fn parse_args(args: &[String]) -> ParsedArgs {
         i += 1;
     }
 
-    ParsedArgs { opts, silent, help, has_data }
+    ParsedArgs {
+        opts,
+        silent,
+        help,
+        has_data,
+    }
 }
 
 fn print_usage() {
