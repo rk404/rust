@@ -8,9 +8,21 @@ edition = "2021"
 # piksele recznie w qr_logic.rs (pelna kontrola nad skala/ramka/kolorami).
 qrcode = { version = "0.14", default-features = false }
 
-# Zapis do PNG/BMP. Wylaczamy niepotrzebne formaty (avif, tiff, webp, ...),
-# zeby ograniczyc czas kompilacji i liczbe zaleznosci.
-image = { version = "0.25", default-features = false, features = ["png", "bmp"] }
+# Zapis do JPG/PNG/BMP oraz odczyt obrazow z kodami QR. Wylaczamy niepotrzebne
+# formaty (avif, tiff, webp, ...), zeby ograniczyc czas kompilacji i zaleznosci.
+image = { version = "0.25", default-features = false, features = ["png", "bmp", "jpeg"] }
+
+# Dekodowanie kodow QR z obrazow (czysty Rust, bez zaleznosci C).
+# Bez domyslnych funkcji - uzywamy prepare_from_greyscale, wiec nie potrzebujemy
+# integracji z konkretna wersja crate'a image.
+rqrr = { version = "0.10", default-features = false }
+
+# JSON: wejscie --input z systemow zewnetrznych (ERP) oraz plik ustawien.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Zapis dokumentu .docx (paczka zip z plikami XML).
+zip = { version = "8", default-features = false, features = ["deflate"] }
 
 # GUI (immediate-mode, natywne okno na Windows/macOS/Linux).
 eframe = { version = "0.35", default-features = false, features = [
