@@ -110,6 +110,8 @@ pub struct QrGenApp {
     last_saved_docx: Option<PathBuf>,
 
     settings_open: bool,
+    /// Okno deweloperskie (--debug-ui): podglad ukladu i edycja stylu egui.
+    debug_ui_open: bool,
     clipboard: Option<arboard::Clipboard>,
     decode: DecodeState,
 
@@ -163,6 +165,7 @@ impl QrGenApp {
             last_saved_image: None,
             last_saved_docx: None,
             settings_open: false,
+            debug_ui_open: job.debug_ui,
             clipboard: None,
             decode: DecodeState::default(),
             system_theme_light,
@@ -483,6 +486,49 @@ impl QrGenApp {
         }
     }
 
+    /// Okno deweloperskie (--debug-ui): "podglad ukladu" (debug-on-hover
+    /// podswietla prostokaty widgetow pod myszka) oraz pelna edycja stylu
+    /// egui na zywo - wartosci dobrane suwakami przepisuje sie do kodu.
+    fn show_debug_window(&mut self, ctx: &egui::Context) {
+        if !self.debug_ui_open {
+            return;
+        }
+        let mut open = self.debug_ui_open;
+        egui::Window::new("🔧 Debug UI")
+            .open(&mut open)
+            .default_width(360.0)
+            .vscroll(true)
+            .show(ctx, |ui| {
+                // Podglad ukladu istnieje w egui tylko w buildach debug
+                // (cfg(debug_assertions)) - w release egui go wycina.
+                #[cfg(debug_assertions)]
+                {
+                    let mut debug_on_hover = ui.ctx().debug_on_hover();
+                    if ui
+                        .checkbox(
+                            &mut debug_on_hover,
+                            "Podgląd układu (podświetlaj widget pod myszką)",
+                        )
+                        .changed()
+                    {
+                        ui.ctx().set_debug_on_hover(debug_on_hover);
+                    }
+                }
+                #[cfg(not(debug_assertions))]
+                ui.label(
+                    egui::RichText::new(
+                        "Podgląd układu jest dostępny tylko w buildzie deweloperskim \
+                         (cargo run -- --debug-ui).",
+                    )
+                    .small()
+                    .weak(),
+                );
+                ui.separator();
+                ui.ctx().clone().settings_ui(ui);
+            });
+        self.debug_ui_open = open;
+    }
+
     /// Informacja pod formularzem, gdzie trafia wygenerowane pliki.
     pub(super) fn show_target_path_hint(&mut self, ui: &mut egui::Ui) {
         let Some(kind) = self.active_format() else {
@@ -537,6 +583,7 @@ impl eframe::App for QrGenApp {
         });
 
         self.show_settings_window(&ctx);
+        self.show_debug_window(&ctx);
     }
 }
 

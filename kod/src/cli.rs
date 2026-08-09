@@ -11,6 +11,8 @@ use std::path::PathBuf;
 pub struct CliArgs {
     pub help: bool,
     pub silent: bool,
+    /// Okno deweloperskie do strojenia interfejsu (tylko GUI).
+    pub debug_ui: bool,
     pub format: Option<FormatKind>,
     pub input_json: Option<PathBuf>,
     pub output: Option<String>,
@@ -66,6 +68,7 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
         match a {
             "-h" | "--help" => cli.help = true,
             "-s" | "--silent" => cli.silent = true,
+            "--debug-ui" => cli.debug_ui = true,
             "--overwrite" => cli.overwrite = Some(true),
             "--no-docx" => cli.docx = Some(false),
             "--format" => {
@@ -155,6 +158,7 @@ pub fn usage() -> String {
         "  --overwrite           Nadpisuj istniejące pliki (domyślnie: dokleja _2, _3, ...)",
         "  --no-docx             (vcard) nie generuj dokumentu Word",
         "  -h, --help            Wyświetla tę pomoc",
+        "  --debug-ui            Okno deweloperskie GUI (podgląd układu, edycja stylu)",
         "",
         "Wygląd kodu:",
         "  --scale N             Rozmiar modułu w pikselach (domyślnie: 10)",
@@ -247,6 +251,8 @@ impl CliArgs {
 /// domyślne <- settings.json <- --input JSON <- jawne flagi CLI.
 pub struct Job {
     pub format: Option<FormatKind>,
+    /// Pokaz okno deweloperskie w GUI (--debug-ui).
+    pub debug_ui: bool,
     pub forms: FormsState,
     pub appearance: Appearance,
     /// Jawna sciezka wyjsciowa (-o lub "output" z JSON).
@@ -299,6 +305,7 @@ pub fn build_job(cli: &CliArgs, settings: &Settings, base_forms: FormsState) -> 
 
     Ok(Job {
         format,
+        debug_ui: cli.debug_ui,
         forms,
         appearance,
         output,
