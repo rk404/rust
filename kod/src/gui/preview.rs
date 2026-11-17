@@ -15,21 +15,14 @@ impl QrGenApp {
             .available_width()
             .clamp(PREVIEW_MIN_SIZE, PREVIEW_SIZE);
 
-        // Naglowek jest ograniczony do tej samej szerokosci co kwadrat podgladu,
-        // dzieki czemu przycisk "Wyczyść" dokuje sie do prawego brzegu ramki.
-        let mut clear = false;
         ui.allocate_ui_with_layout(
             egui::vec2(side, PREVIEW_HEADER_HEIGHT),
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
                 ui.label(egui::RichText::new("Podgląd").strong());
-                clear = super::clear_button(ui);
+                ui.label(egui::RichText::new("na żywo, plik nie jest zapisany").small().weak());
             },
         );
-        if clear {
-            self.invalidate_preview();
-            self.status = "Wyczyszczono podgląd wygenerowanego kodu.".to_string();
-        }
 
         let (rect, _) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::hover());
         ui.painter().rect_stroke(
@@ -42,10 +35,16 @@ impl QrGenApp {
         if let Some(tex) = &self.preview {
             ui.put(rect, egui::Image::new(tex).fit_to_exact_size(rect.size()));
         } else {
-            ui.put(
-                rect,
-                egui::Label::new("Wygeneruj kod, aby zobaczyć podgląd.").wrap(),
-            );
+            let (text, is_error) = self
+                .preview_message
+                .clone()
+                .unwrap_or_else(|| ("Wpisz dane, aby zobaczyć podgląd kodu.".to_string(), false));
+            let rich = if is_error {
+                egui::RichText::new(text).color(ui.visuals().error_fg_color)
+            } else {
+                egui::RichText::new(text).weak()
+            };
+            ui.put(rect.shrink(12.0), egui::Label::new(rich).wrap());
         }
     }
 }

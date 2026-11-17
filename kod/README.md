@@ -7,6 +7,7 @@ systemów (np. ERP) przez argumenty CLI lub plik JSON.
 
 ## Co potrafi aplikacja
 
+- pokazywać **podgląd na żywo** (w pamięci, bez zapisu) i zapisywać plik dopiero przyciskiem „Zapisz”,
 - generować kod QR dla formatów: **Tekst**, **vCard** (wizytówka), **Link**, **E-mail**,
 - dla vCard generować dodatkowo **dokument Word (.docx)** z danymi do wizytówki
   (blok polski oraz — gdy podano stanowisko po angielsku — blok angielski),
@@ -33,6 +34,22 @@ systemów (np. ERP) przez argumenty CLI lub plik JSON.
 3. **Argumenty z `--silent`** → tryb konsolowy bez okna (dla ERP/skryptów);
    ścieżki zapisanych plików trafiają na stdout, błędy na stderr
    (kod wyjścia: `2` błędne argumenty/JSON, `1` błąd generowania).
+   Lokalny `settings.json` jest tu **pomijany** (wynik nie zależy od komputera);
+   `--use-settings` go włącza.
+
+### qrgen-cli (dla ERP i plików .bat)
+
+Na Windows `qrgen_rust.exe` to aplikacja okienkowa: `cmd` i pliki `.bat` nie czekają
+na jej zakończenie, więc nie widać kodu wyjścia ani stdout. Do integracji służy
+osobny **`qrgen-cli.exe`** (zwykła aplikacja konsolowa, zawsze tryb `--silent`):
+
+```bat
+qrgen-cli.exe --format vcard --input pracownik.json -o "C:\Wizytowki"
+if errorlevel 1 echo Blad generowania
+```
+
+Zapis plików jest atomowy (`create_new`), więc równoległe wywołania nigdy nie
+dostaną tej samej nazwy.
 
 ## Integracja z ERP
 
@@ -94,8 +111,9 @@ Pola vCard:  --first-name --last-name --phone --mobile --email --website
 Pola e-mail: --to --subject --body        Pole link: --url
 ```
 
-Nieznane flagi i błędne wartości kończą się błędem (kod 2) — nic nie jest
-ignorowane po cichu.
+Nieznane flagi, błędne wartości i nadmiarowe dane pozycyjne kończą się błędem
+(kod 2) — nic nie jest ignorowane po cichu. Tekst zaczynający się od `-` podaj po `--`.
+Maksymalny bok obrazu to 8000 px.
 
 ## Przykłady
 
@@ -111,7 +129,9 @@ qrgen_rust --silent --format link --url firma.pl -o /tmp/kody/
 
 ```text
 src/
-├── main.rs        – punkt wejścia: CLI → --help | --silent | GUI
+├── main.rs        – punkt wejścia (GUI): CLI → --help | --silent | GUI
+├── bin/qrgen-cli.rs – wersja konsolowa (zawsze --silent) dla ERP
+├── silent.rs      – tryb konsolowy współdzielony przez oba pliki wykonywalne
 ├── lib.rs         – moduły jako biblioteka (testy integracyjne w tests/)
 ├── cli.rs         – parser argumentów + scalanie z JSON/ustawieniami
 ├── input_json.rs  – schemat pliku --input (serde)
@@ -131,8 +151,8 @@ src/
 Wymagany jest zainstalowany Rust (`rustup`). W katalogu projektu:
 
 ```bash
-cargo build --release   # binarka: target/release/qrgen_rust(.exe)
-cargo test              # testy jednostkowe + round-trip (generuj → dekoduj)
+cargo build --release   # target/release/qrgen_rust(.exe) oraz qrgen-cli(.exe)
+cargo test              # jednostkowe + round-trip + testy CLI (kody wyjścia, pliki)
 ```
 
 ## Zależności

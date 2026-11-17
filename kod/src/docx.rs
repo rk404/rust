@@ -24,7 +24,7 @@ fn paragraph(text: &str, bold: bool) -> String {
     }
     let bold_tag = if bold { "<w:b/>" } else { "" };
     format!(
-        "<w:p><w:r><w:rPr><w:rFonts w:ascii=\"Calibri\" w:hAnsi=\"Calibri\"/><w:sz w:val=\"22\"/>{bold_tag}</w:rPr><w:t xml:space=\"preserve\">{}</w:t></w:r></w:p>",
+        "<w:p><w:r><w:rPr><w:rFonts w:ascii=\"Calibri\" w:hAnsi=\"Calibri\"/>{bold_tag}<w:sz w:val=\"22\"/></w:rPr><w:t xml:space=\"preserve\">{}</w:t></w:r></w:p>",
         xml_escape(text)
     )
 }
@@ -188,6 +188,15 @@ mod tests {
         data.last_name = "Kowalski & <Syn>".to_string();
         let xml = document_xml(&build_business_card_docx(&data).unwrap());
         assert!(xml.contains("Kowalski &amp; &lt;Syn&gt;"));
+    }
+
+    #[test]
+    fn run_properties_follow_schema_order() {
+        // Schemat OOXML wymaga kolejnosci rFonts, b, sz - Word bywa wrazliwy
+        // na odwrotna ("plik jest uszkodzony").
+        let xml = document_xml(&build_business_card_docx(&sample()).unwrap());
+        assert!(xml.contains("<w:b/><w:sz w:val=\"22\"/>"));
+        assert!(!xml.contains("<w:sz w:val=\"22\"/><w:b/>"));
     }
 
     #[test]

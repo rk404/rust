@@ -11,3 +11,4 @@ pub mod output;
 pub mod platform;
 pub mod render;
 pub mod settings;
+pub mod silent;

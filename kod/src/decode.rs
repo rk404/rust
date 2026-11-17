@@ -38,8 +38,10 @@ pub fn decode_rgba(width: usize, height: usize, rgba: &[u8]) -> Result<DecodedQr
     if rgba.len() != width * height * 4 {
         return Err("nieprawidlowe wymiary obrazu".to_string());
     }
-    let luma: Vec<u8> = rgba
-        .chunks_exact(4)
+    // Dlugosc jest wielokrotnoscia 4 (sprawdzone wyzej), wiec reszta jest pusta.
+    let (pixels, _) = rgba.as_chunks::<4>();
+    let luma: Vec<u8> = pixels
+        .iter()
         .map(|px| {
             // standardowe wagi luminancji (BT.601)
             ((px[0] as u32 * 299 + px[1] as u32 * 587 + px[2] as u32 * 114) / 1000) as u8

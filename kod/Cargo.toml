@@ -2,6 +2,17 @@
 name = "qrgen_rust"
 version = "0.1.0"
 edition = "2021"
+default-run = "qrgen_rust"
+rust-version = "1.88"
+
+# GUI (na Windows bez konsoli) oraz wersja konsolowa dla ERP/skryptow.
+[[bin]]
+name = "qrgen_rust"
+path = "src/main.rs"
+
+[[bin]]
+name = "qrgen-cli"
+path = "src/bin/qrgen-cli.rs"
 
 [dependencies]
 # Kodowanie QR - wylaczamy domyslne funkcje (image/svg/pic), bo renderujemy
@@ -42,7 +53,7 @@ arboard = "3.6"
 # Windows-owe API: doczepienie konsoli w trybie --silent/--help (main.rs) oraz
 # odczyt motywu jasny/ciemny z rejestru (gui.rs) bez odpalania procesow zewnetrznych.
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.58", features = ["Win32_System_Console", "Win32_Foundation", "Win32_System_Registry"] }
+windows = { version = "0.58", features = ["Win32_System_Console", "Win32_Foundation", "Win32_System_Registry", "Win32_System_Com", "Win32_UI_Shell"] }
 
 [profile.release]
 opt-level = 3

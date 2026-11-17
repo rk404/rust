@@ -11,6 +11,9 @@ use std::path::PathBuf;
 pub struct CliArgs {
     pub help: bool,
     pub silent: bool,
+    /// W trybie --silent uzyj lokalnego settings.json (domyslnie ignorowany,
+    /// zeby wynik wywolania z ERP nie zalezal od komputera).
+    pub use_settings: bool,
     /// Okno deweloperskie do strojenia interfejsu (tylko GUI).
     pub debug_ui: bool,
     pub format: Option<FormatKind>,
@@ -63,11 +66,19 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
             .ok_or_else(|| format!("flaga {flag} wymaga wartosci"))
     }
 
+    let mut only_positional = false;
     while i < args.len() {
         let a = args[i].as_str();
+        if only_positional || (!a.starts_with('-') && a != "--") {
+            set_positional(&mut cli, a)?;
+            i += 1;
+            continue;
+        }
         match a {
+            "--" => only_positional = true,
             "-h" | "--help" => cli.help = true,
             "-s" | "--silent" => cli.silent = true,
+            "--use-settings" => cli.use_settings = true,
             "--debug-ui" => cli.debug_ui = true,
             "--overwrite" => cli.overwrite = Some(true),
             "--no-docx" => cli.docx = Some(false),
@@ -133,13 +144,25 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
             "--city" => cli.city = Some(value(args, &mut i, a)?.to_string()),
             "--postal-code" => cli.postal_code = Some(value(args, &mut i, a)?.to_string()),
             "--country" => cli.country = Some(value(args, &mut i, a)?.to_string()),
-            _ if !a.starts_with('-') => cli.text_data = Some(a.to_string()),
             _ => return Err(format!("nieznana flaga: '{a}' (uzyj --help)")),
         }
         i += 1;
     }
 
     Ok(cli)
+}
+
+/// Zapisuje argument pozycyjny (dane tekstowe). Drugi argument pozycyjny to
+/// blad - wczesniej cicho nadpisywal pierwszy.
+fn set_positional(cli: &mut CliArgs, value: &str) -> Result<(), String> {
+    if cli.text_data.is_some() {
+        return Err(format!(
+            "podano wiecej niz jedne dane pozycyjne (nadmiarowy argument: '{value}'); \
+             ujmij tekst w cudzyslow lub uzyj -- przed danymi"
+        ));
+    }
+    cli.text_data = Some(value.to_string());
+    Ok(())
 }
 
 pub fn usage() -> String {
@@ -157,6 +180,9 @@ pub fn usage() -> String {
         "  -s, --silent          Tryb bez okna (konsolowy)",
         "  --overwrite           Nadpisuj istniejące pliki (domyślnie: dokleja _2, _3, ...)",
         "  --no-docx             (vcard) nie generuj dokumentu Word",
+        "  --                    koniec flag; reszta to dane tekstowe (np. tekst zaczynający się od -)",
+        "  --use-settings        (--silent) uwzględnij lokalny settings.json; domyślnie jest",
+        "                        pomijany, żeby wynik nie zależał od komputera",
         "  -h, --help            Wyświetla tę pomoc",
         "  --debug-ui            Okno deweloperskie GUI (podgląd układu, edycja stylu)",
         "",
@@ -290,6 +316,16 @@ pub fn build_job(cli: &CliArgs, settings: &Settings, base_forms: FormsState) -> 
         .or(json.as_ref().and_then(|j| j.format))
         .or(cli.text_data.as_ref().map(|_| FormatKind::Text));
 
+    if let (Some(data), Some(kind)) = (&cli.text_data, format) {
+        if kind != FormatKind::Text {
+            return Err(format!(
+                "dane pozycyjne ('{data}') dotycza tylko formatu text, a wybrano --format {}; \
+                 uzyj flag pol tego formatu",
+                kind.cli_name()
+            ));
+        }
+    }
+
     let output = cli
         .output
         .clone()
@@ -331,6 +367,33 @@ mod tests {
         assert_eq!(cli.text_data.as_deref(), Some("moje dane"));
         assert_eq!(cli.output.as_deref(), Some("plik.png"));
         assert!(cli.silent);
+    }
+
+    #[test]
+    fn second_positional_is_error() {
+        let err = parse(&args(&["a", "b"])).unwrap_err();
+        assert!(err.contains("wiecej niz jedne"));
+    }
+
+    #[test]
+    fn double_dash_allows_dash_prefixed_text() {
+        let cli = parse(&args(&["--silent", "--", "-tekst z minusem"])).unwrap();
+        assert_eq!(cli.text_data.as_deref(), Some("-tekst z minusem"));
+        // po -- nawet flagi sa danymi
+        let cli = parse(&args(&["--", "--silent"])).unwrap();
+        assert!(!cli.silent);
+        assert_eq!(cli.text_data.as_deref(), Some("--silent"));
+    }
+
+    #[test]
+    fn positional_with_non_text_format_is_error() {
+        let cli = parse(&args(&["--format", "vcard", "dane"])).unwrap();
+        let err = build_job(&cli, &Settings::default(), FormsState::default())
+            .err()
+            .unwrap();
+        assert!(err.contains("vcard"));
+        let cli = parse(&args(&["--format", "text", "dane"])).unwrap();
+        assert!(build_job(&cli, &Settings::default(), FormsState::default()).is_ok());
     }
 
     #[test]

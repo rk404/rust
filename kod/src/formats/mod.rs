@@ -59,6 +59,16 @@ impl FormatKind {
         }
     }
 
+    /// Nazwa uzywana w --format i w JSON.
+    pub fn cli_name(self) -> &'static str {
+        match self {
+            FormatKind::Text => "text",
+            FormatKind::Link => "link",
+            FormatKind::Email => "email",
+            FormatKind::VCard => "vcard",
+        }
+    }
+
     /// Wartosc przyjmowana przez --format oraz pole "format" w JSON.
     pub fn from_cli(s: &str) -> Option<FormatKind> {
         match s.trim().to_ascii_lowercase().as_str() {

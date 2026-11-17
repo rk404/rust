@@ -89,10 +89,7 @@ impl Settings {
 
     /// Katalog zapisu z uwzglednieniem domyslnego (Dokumenty).
     pub fn resolved_output_dir(&self) -> PathBuf {
-        if !self.output_dir.trim().is_empty() {
-            return PathBuf::from(self.output_dir.trim());
-        }
-        platform::documents_dir().unwrap_or_else(|| PathBuf::from("."))
+        output::resolve_output_dir(&self.output_dir)
     }
 }
 

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 pub const DEFAULT_EXTENSION: &str = "jpg";
 pub const SUPPORTED_EXTENSIONS: [&str; 4] = ["jpg", "jpeg", "png", "bmp"];
 const JPEG_QUALITY: u8 = 95;
-const MAX_UNIQUE_SUFFIX: u32 = 99;
+const MAX_UNIQUE_SUFFIX: u32 = 999;
 
 /// Transliteracja polskich znakow diakrytycznych na ASCII - nazwy plikow
 /// przechodza przez ERP/SMB/mail, gdzie znaki spoza ASCII bywaja problemem.
@@ -120,6 +120,58 @@ pub struct SaveResult {
     pub docx_path: Option<PathBuf>,
 }
 
+/// Jak interpretowana jest jawna sciezka wyjsciowa (-o / pole "output").
+#[derive(Debug, PartialEq, Eq)]
+pub enum OutputTarget {
+    /// Katalog (istniejacy, zakonczony separatorem lub bez rozszerzenia -
+    /// np. ERP podaje katalog, ktory dopiero powstanie).
+    Dir(PathBuf),
+    /// Plik z rozszerzeniem; `dir` = None, gdy podano sama nazwe pliku.
+    File {
+        dir: Option<PathBuf>,
+        stem: String,
+        ext: String,
+    },
+}
+
+/// Rozpoznaje, czy jawna sciezka wskazuje katalog czy plik. Jedyne miejsce
+/// z ta logika - uzywaja jej zarowno zapis (CLI), jak i GUI.
+pub fn classify_output(raw: &str) -> Option<OutputTarget> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(trimmed);
+    let ends_with_sep = trimmed.ends_with('/') || trimmed.ends_with('\\');
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .filter(|e| !e.is_empty());
+    match ext {
+        Some(ext) if !ends_with_sep && !path.is_dir() => {
+            let stem = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let dir = path
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .map(Path::to_path_buf);
+            Some(OutputTarget::File { dir, stem, ext })
+        }
+        _ => Some(OutputTarget::Dir(path)),
+    }
+}
+
+/// Katalog zapisu: wpisany przez uzytkownika lub, gdy pusty, folder Dokumenty.
+pub fn resolve_output_dir(configured: &str) -> PathBuf {
+    let configured = configured.trim();
+    if !configured.is_empty() {
+        return PathBuf::from(configured);
+    }
+    crate::platform::documents_dir().unwrap_or_else(|| PathBuf::from("."))
+}
+
 /// Wyznacza katalog, rdzen i rozszerzenie na podstawie zlecenia.
 fn resolve_targets(req: &SaveRequest) -> Result<(PathBuf, String, String), String> {
     let fallback_stem = {
@@ -130,43 +182,15 @@ fn resolve_targets(req: &SaveRequest) -> Result<(PathBuf, String, String), Strin
             s
         }
     };
-
-    let (dir, stem, ext) = match req.output {
+    let (dir, stem, ext) = match req.output.and_then(classify_output) {
         None => (req.default_dir.clone(), fallback_stem, req.extension.to_string()),
-        Some(raw) => {
-            let trimmed = raw.trim();
-            if trimmed.is_empty() {
-                (req.default_dir.clone(), fallback_stem, req.extension.to_string())
-            } else {
-                let path = PathBuf::from(trimmed);
-                let ends_with_sep = trimmed.ends_with('/') || trimmed.ends_with('\\');
-                let has_extension = path
-                    .extension()
-                    .map(|e| !e.is_empty())
-                    .unwrap_or(false);
-                if ends_with_sep || path.is_dir() || !has_extension {
-                    // Katalog (istniejacy, zakonczony separatorem lub bez
-                    // rozszerzenia - np. ERP podaje katalog, ktory dopiero powstanie).
-                    (path, fallback_stem, req.extension.to_string())
-                } else {
-                    let ext = path
-                        .extension()
-                        .map(|e| e.to_string_lossy().to_lowercase())
-                        .unwrap_or_default();
-                    let stem = path
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().to_string())
-                        .unwrap_or(fallback_stem);
-                    let dir = match path.parent() {
-                        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
-                        _ => req.default_dir.clone(),
-                    };
-                    (dir, stem, ext)
-                }
-            }
-        }
+        Some(OutputTarget::Dir(dir)) => (dir, fallback_stem, req.extension.to_string()),
+        Some(OutputTarget::File { dir, stem, ext }) => (
+            dir.unwrap_or_else(|| req.default_dir.clone()),
+            if stem.is_empty() { fallback_stem } else { stem },
+            ext,
+        ),
     };
-
     let ext = ext.to_lowercase();
     if !SUPPORTED_EXTENSIONS.contains(&ext.as_str()) {
         return Err(format!(
@@ -176,36 +200,62 @@ fn resolve_targets(req: &SaveRequest) -> Result<(PathBuf, String, String), Strin
     Ok((dir, stem, ext))
 }
 
-/// Dobiera nazwy nie nadpisujace istniejacych plikow: przy kolizji dokleja
-/// "_2", "_3", ... (obraz i docx zawsze dostaja ten sam sufiks, zeby byly para).
-fn unique_targets(
+/// Zarezerwowane (utworzone, puste) pliki: obraz oraz opcjonalnie docx.
+type Reserved = (PathBuf, fs::File, Option<(PathBuf, fs::File)>);
+
+/// Rezerwuje nazwy plikow, tworzac je atomowo (`create_new`): przy kolizji
+/// dokleja "_2", "_3", ... Obraz i docx zawsze dostaja ten sam sufiks,
+/// zeby byly para. Dzieki atomowemu tworzeniu dwa rownolegle wywolania
+/// (np. z ERP) nigdy nie dostana tej samej nazwy.
+/// Z `overwrite` plik jest otwierany z obcieciem, bez sufiksow.
+fn reserve_targets(
     dir: &Path,
     stem: &str,
     ext: &str,
     want_docx: bool,
     overwrite: bool,
-) -> Result<(PathBuf, Option<PathBuf>), String> {
-    let candidate = |n: u32| {
+) -> Result<Reserved, String> {
+    let open = |path: &Path| -> std::io::Result<fs::File> {
+        let mut options = fs::OpenOptions::new();
+        options.write(true);
+        if overwrite {
+            options.create(true).truncate(true);
+        } else {
+            options.create_new(true);
+        }
+        options.open(path)
+    };
+    let create_error = |path: &Path, e: std::io::Error| {
+        format!("nie udalo sie utworzyc pliku '{}': {e}", path.display())
+    };
+
+    for n in 1..=MAX_UNIQUE_SUFFIX {
         let full_stem = if n <= 1 {
             stem.to_string()
         } else {
             format!("{stem}_{n}")
         };
-        let image = dir.join(format!("{full_stem}.{ext}"));
-        let docx = want_docx.then(|| dir.join(format!("{full_stem}.docx")));
-        (image, docx)
-    };
-
-    if overwrite {
-        let (image, docx) = candidate(1);
-        return Ok((image, docx));
-    }
-
-    for n in 1..=MAX_UNIQUE_SUFFIX {
-        let (image, docx) = candidate(n);
-        let taken = image.exists() || docx.as_ref().map(|d| d.exists()).unwrap_or(false);
-        if !taken {
-            return Ok((image, docx));
+        let image_path = dir.join(format!("{full_stem}.{ext}"));
+        let image_file = match open(&image_path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(create_error(&image_path, e)),
+        };
+        if !want_docx {
+            return Ok((image_path, image_file, None));
+        }
+        let docx_path = dir.join(format!("{full_stem}.docx"));
+        match open(&docx_path) {
+            Ok(docx_file) => return Ok((image_path, image_file, Some((docx_path, docx_file)))),
+            Err(e) => {
+                // Zwalniamy wlasnie utworzony (pusty) plik obrazu.
+                drop(image_file);
+                let _ = fs::remove_file(&image_path);
+                if e.kind() == std::io::ErrorKind::AlreadyExists {
+                    continue;
+                }
+                return Err(create_error(&docx_path, e));
+            }
         }
     }
     Err(format!(
@@ -214,49 +264,71 @@ fn unique_targets(
     ))
 }
 
-/// Zapis obrazu: JPEG z jakoscia 95 (ostre krawedzie modulow bez artefaktow),
-/// PNG/BMP przez standardowy zapis wg rozszerzenia.
+/// Zapisuje obraz do otwartego pliku: JPEG z jakoscia 95 (ostre krawedzie
+/// modulow bez artefaktow), PNG/BMP wg rozszerzenia.
+fn write_image(img: &RgbImage, file: fs::File, ext: &str, path: &Path) -> Result<(), String> {
+    let mut writer = std::io::BufWriter::new(file);
+    let fail = |e: image::ImageError| {
+        format!("nie udalo sie zapisac pliku '{}': {e}", path.display())
+    };
+    match ext {
+        "jpg" | "jpeg" => {
+            let encoder =
+                image::codecs::jpeg::JpegEncoder::new_with_quality(&mut writer, JPEG_QUALITY);
+            img.write_with_encoder(encoder).map_err(fail)?;
+        }
+        "png" => img
+            .write_to(&mut writer, image::ImageFormat::Png)
+            .map_err(fail)?,
+        "bmp" => img
+            .write_to(&mut writer, image::ImageFormat::Bmp)
+            .map_err(fail)?,
+        other => return Err(format!("nieobslugiwane rozszerzenie '.{other}'")),
+    }
+    std::io::Write::flush(&mut writer)
+        .map_err(|e| format!("nie udalo sie zapisac pliku '{}': {e}", path.display()))
+}
+
+/// Zapis obrazu pod wskazana sciezka (rozszerzenie wybiera format);
+/// istniejacy plik jest nadpisywany.
 pub fn save_image(img: &RgbImage, path: &Path) -> Result<(), String> {
     let ext = path
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase())
         .unwrap_or_default();
-    let result = if ext == "jpg" || ext == "jpeg" {
-        let file = fs::File::create(path)
-            .map_err(|e| format!("nie udalo sie utworzyc pliku '{}': {e}", path.display()))?;
-        let writer = std::io::BufWriter::new(file);
-        let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(writer, JPEG_QUALITY);
-        img.write_with_encoder(encoder)
-            .map_err(|e| format!("nie udalo sie zapisac pliku '{}': {e}", path.display()))
-    } else {
-        img.save(path)
-            .map_err(|e| format!("nie udalo sie zapisac pliku '{}': {e}", path.display()))
-    };
-    result
+    let file = fs::File::create(path)
+        .map_err(|e| format!("nie udalo sie utworzyc pliku '{}': {e}", path.display()))?;
+    write_image(img, file, &ext, path)
 }
 
 /// Renderuje kod QR i zapisuje obraz (oraz ewentualny .docx z wizytowka).
 pub fn generate_and_save(req: &SaveRequest) -> Result<SaveResult, String> {
     let img = render::render_image(req.payload, req.appearance)?;
+    save_rendered(req, &img)
+}
 
+/// Jak `generate_and_save`, ale z juz wyrenderowanym obrazem (GUI renderuje
+/// go dla podgladu - nie ma potrzeby robic tego drugi raz).
+pub fn save_rendered(req: &SaveRequest, img: &RgbImage) -> Result<SaveResult, String> {
     let (dir, stem, ext) = resolve_targets(req)?;
+    // Wszystko, co moze sie nie udac bez dotykania dysku, robimy przed
+    // utworzeniem plikow - zadnych pustych resztek po bledzie.
+    let docx_bytes = match req.docx {
+        Some(vcard) => Some(docx::build_business_card_docx(vcard)?),
+        None => None,
+    };
     fs::create_dir_all(&dir)
         .map_err(|e| format!("nie udalo sie utworzyc katalogu '{}': {e}", dir.display()))?;
-    let (image_path, docx_path) =
-        unique_targets(&dir, &stem, &ext, req.docx.is_some(), req.overwrite)?;
+    let (image_path, image_file, docx_target) =
+        reserve_targets(&dir, &stem, &ext, docx_bytes.is_some(), req.overwrite)?;
 
-    save_image(&img, &image_path)?;
-
-    if let (Some(vcard), Some(docx_target)) = (req.docx, docx_path.as_ref()) {
-        let bytes = docx::build_business_card_docx(vcard)?;
-        fs::write(docx_target, bytes).map_err(|e| {
-            format!(
-                "nie udalo sie zapisac pliku '{}': {e}",
-                docx_target.display()
-            )
-        })?;
+    write_image(img, image_file, &ext, &image_path)?;
+    let mut docx_path = None;
+    if let (Some(bytes), Some((path, mut file))) = (docx_bytes, docx_target) {
+        std::io::Write::write_all(&mut file, &bytes)
+            .map_err(|e| format!("nie udalo sie zapisac pliku '{}': {e}", path.display()))?;
+        docx_path = Some(path);
     }
-
     Ok(SaveResult {
         image_path,
         docx_path,
@@ -298,14 +370,68 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("qrgen_test_{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("Jan_Kowalski.jpg"), b"x").unwrap();
-        let (image, docx) = unique_targets(&dir, "Jan_Kowalski", "jpg", true, false).unwrap();
+        let (image, _, docx) = reserve_targets(&dir, "Jan_Kowalski", "jpg", true, false).unwrap();
         assert!(image.ends_with("Jan_Kowalski_2.jpg"));
-        assert!(docx.unwrap().ends_with("Jan_Kowalski_2.docx"));
-
+        assert!(docx.unwrap().0.ends_with("Jan_Kowalski_2.docx"));
         // z nadpisywaniem: bez sufiksu mimo istniejacego pliku
-        let (image, _) = unique_targets(&dir, "Jan_Kowalski", "jpg", false, true).unwrap();
+        let (image, _, _) = reserve_targets(&dir, "Jan_Kowalski", "jpg", false, true).unwrap();
         assert!(image.ends_with("Jan_Kowalski.jpg"));
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn docx_collision_skips_whole_pair_and_leaves_no_leftovers() {
+        let dir = std::env::temp_dir().join(format!("qrgen_pair_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        // zajety tylko docx: para musi dostac sufiks, a obraz _1 nie moze zostac
+        fs::write(dir.join("Ewa.docx"), b"x").unwrap();
+        let (image, _, docx) = reserve_targets(&dir, "Ewa", "png", true, false).unwrap();
+        assert!(image.ends_with("Ewa_2.png"));
+        assert!(docx.unwrap().0.ends_with("Ewa_2.docx"));
+        assert!(!dir.join("Ewa.png").exists());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn parallel_saves_never_share_a_name() {
+        let dir = std::env::temp_dir().join(format!("qrgen_par_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let handles: Vec<_> = (0..16)
+            .map(|_| {
+                let dir = dir.clone();
+                std::thread::spawn(move || {
+                    reserve_targets(&dir, "kod", "jpg", false, false)
+                        .unwrap()
+                        .0
+                })
+            })
+            .collect();
+        let mut names: Vec<PathBuf> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), 16);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn classifies_output_paths() {
+        assert_eq!(classify_output("  "), None);
+        assert_eq!(
+            classify_output("/dane/wizytowki/"),
+            Some(OutputTarget::Dir(PathBuf::from("/dane/wizytowki/")))
+        );
+        assert_eq!(
+            classify_output("/dane/wizytowki"),
+            Some(OutputTarget::Dir(PathBuf::from("/dane/wizytowki")))
+        );
+        assert_eq!(
+            classify_output("kod.PNG"),
+            Some(OutputTarget::File {
+                dir: None,
+                stem: "kod".into(),
+                ext: "png".into()
+            })
+        );
     }
 
     #[test]
