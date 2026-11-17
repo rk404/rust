@@ -139,8 +139,12 @@ impl QrGenApp {
         // Miniatura wczytanego obrazu (niezaleznie od wyniku dekodowania).
         let texture = image::open(path).ok().map(|img| {
             let rgba = img.to_rgba8();
-            let size = [rgba.width() as usize, rgba.height() as usize];
-            let color = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
+            let color = super::texture_image(
+                rgba.as_raw(),
+                rgba.width() as usize,
+                rgba.height() as usize,
+                false,
+            );
             ctx.load_texture("decoded_source", color, egui::TextureOptions::LINEAR)
         });
 
@@ -166,7 +170,7 @@ impl QrGenApp {
         let height = image_data.height;
         let rgba: Vec<u8> = image_data.bytes.into_owned();
 
-        let color = egui::ColorImage::from_rgba_unmultiplied([width, height], &rgba);
+        let color = super::texture_image(&rgba, width, height, false);
         let texture = Some(ctx.load_texture(
             "decoded_source",
             color,

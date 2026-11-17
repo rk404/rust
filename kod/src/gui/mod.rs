@@ -22,6 +22,39 @@ use std::time::{Duration, Instant};
 
 const SIDE_BY_SIDE_MIN_WIDTH: f32 = 680.0;
 
+/// Najwiekszy bok tekstury wysylanej do GPU. Wiele kart graficznych (i
+/// sterownikow programowych) ma limit 8192 px, a duze obrazy zjadaja pamiec -
+/// podglad i miniatury zawsze zmniejszamy do tego rozmiaru.
+pub(crate) const MAX_TEXTURE_SIDE: u32 = 2048;
+
+/// Zmniejsza obraz RGBA do `MAX_TEXTURE_SIDE` (z zachowaniem proporcji).
+/// `nearest` zachowuje ostre moduly kodu QR w podgladzie.
+pub(crate) fn texture_image(
+    rgba: &[u8],
+    width: usize,
+    height: usize,
+    nearest: bool,
+) -> egui::ColorImage {
+    let max_side = width.max(height) as u32;
+    if max_side <= MAX_TEXTURE_SIDE {
+        return egui::ColorImage::from_rgba_unmultiplied([width, height], rgba);
+    }
+    let ratio = MAX_TEXTURE_SIDE as f32 / max_side as f32;
+    let new_w = ((width as f32 * ratio) as u32).max(1);
+    let new_h = ((height as f32 * ratio) as u32).max(1);
+    let Some(source) = image::RgbaImage::from_raw(width as u32, height as u32, rgba.to_vec())
+    else {
+        return egui::ColorImage::from_rgba_unmultiplied([width, height], rgba);
+    };
+    let filter = if nearest {
+        image::imageops::FilterType::Nearest
+    } else {
+        image::imageops::FilterType::Triangle
+    };
+    let small = image::imageops::resize(&source, new_w, new_h, filter);
+    egui::ColorImage::from_rgba_unmultiplied([new_w as usize, new_h as usize], small.as_raw())
+}
+
 /// Wspolna geometria formularzy - identyczna na kazdej zakladce.
 const LABEL_WIDTH: f32 = 150.0;
 const FIELD_HEIGHT: f32 = 24.0;
@@ -362,8 +395,9 @@ impl QrGenApp {
                 return;
             }
         };
-        let size = [img.width() as usize, img.height() as usize];
-        let color_image = egui::ColorImage::from_rgb(size, img.as_raw());
+        let rgba = image::DynamicImage::ImageRgb8(img.clone()).to_rgba8();
+        let color_image =
+            texture_image(rgba.as_raw(), img.width() as usize, img.height() as usize, true);
         let texture = ctx.load_texture("qr_preview", color_image, egui::TextureOptions::NEAREST);
 
         let stem = self.current_stem(kind);

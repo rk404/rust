@@ -5,7 +5,9 @@ use qrcode::{Color, EcLevel, QrCode};
 // a chronia przed przypadkowa alokacja wielogigabajtowego obrazu.
 pub const MAX_SCALE: u32 = 100;
 pub const MAX_BORDER: u32 = 50;
-pub const MAX_DIM: u32 = 20_000;
+// 8000 px => bufor RGB ok. 190 MB (poprzedni limit 20 000 px to ok. 1,2 GB).
+// Kod QR do druku w 600 dpi na formacie A4 miesci sie z duzym zapasem.
+pub const MAX_DIM: u32 = 8_000;
 
 /// Ustawienia wygladu kodu QR - oddzielone od danych do zakodowania.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
