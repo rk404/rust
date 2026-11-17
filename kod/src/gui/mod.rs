@@ -13,7 +13,6 @@ use crate::cli::Job;
 use crate::decode::DecodedQr;
 use crate::formats::{FormatKind, FormsState};
 use crate::output::{self, SaveRequest};
-use crate::platform;
 use crate::render::Appearance;
 use crate::settings::{self, Settings, ThemeMode};
 use eframe::egui;
@@ -187,7 +186,7 @@ pub fn run_gui(job: Job, settings: Settings) {
 
 impl QrGenApp {
     fn new(cc: &eframe::CreationContext<'_>, job: Job, settings: Settings) -> Self {
-        let system_theme_light = platform::windows_uses_light_theme();
+        let system_theme_light = Self::read_system_light(&cc.egui_ctx);
 
         let mut app = Self {
             view: match job.format {
@@ -332,13 +331,32 @@ impl QrGenApp {
         }
     }
 
-    /// Sledzi motyw systemowy (co 2 s) i aplikuje palete Solarized,
-    /// gdy efektywny motyw sie zmieni.
-    fn sync_theme(&mut self, ctx: &egui::Context) {
-        if self.theme_mode == ThemeMode::Auto
-            && self.last_theme_check.elapsed() >= Duration::from_secs(2)
+    /// Czy system uzywa jasnego motywu. Windows: odczyt rejestru (jak dotad);
+    /// macOS i Linux: motyw zgłaszany przez system okienkowy (winit/egui).
+    /// Gdy system motywu nie podaje, przyjmujemy jasny.
+    fn read_system_light(ctx: &egui::Context) -> bool {
+        #[cfg(windows)]
         {
-            self.system_theme_light = platform::windows_uses_light_theme();
+            let _ = ctx;
+            crate::platform::windows_uses_light_theme()
+        }
+        #[cfg(not(windows))]
+        {
+            ctx.system_theme()
+                .map(|theme| theme == egui::Theme::Light)
+                .unwrap_or(true)
+        }
+    }
+
+    /// Sledzi motyw systemowy i aplikuje palete Solarized, gdy efektywny
+    /// motyw sie zmieni. Rejestr Windows odpytujemy co 2 s; poza Windows
+    /// odczyt jest tani (pamiec egui), wiec robimy go w kazdej klatce -
+    /// dzieki temu ciemny motyw macOS dziala od pierwszej klatki.
+    fn sync_theme(&mut self, ctx: &egui::Context) {
+        let poll_due =
+            !cfg!(windows) || self.last_theme_check.elapsed() >= Duration::from_secs(2);
+        if self.theme_mode == ThemeMode::Auto && poll_due {
+            self.system_theme_light = Self::read_system_light(ctx);
             self.last_theme_check = Instant::now();
         }
 

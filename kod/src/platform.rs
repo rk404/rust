@@ -53,11 +53,6 @@ pub fn windows_uses_light_theme() -> bool {
     }
 }
 
-#[cfg(not(windows))]
-pub fn windows_uses_light_theme() -> bool {
-    true
-}
-
 /// Folder Dokumenty uzytkownika - domyslna lokalizacja zapisu.
 /// Na Windows pytamy system o folder znany (uwzglednia przekierowanie
 /// OneDrive i zmienione lokalizacje), z awaryjnym `%USERPROFILE%\\Documents`.
@@ -93,7 +88,8 @@ fn known_documents_folder() -> Option<PathBuf> {
     }
 }
 
-/// Katalog na plik ustawien aplikacji.
+/// Katalog na plik ustawien aplikacji: %APPDATA% (Windows),
+/// ~/Library/Application Support (macOS), $XDG_CONFIG_HOME lub ~/.config (reszta).
 pub fn config_dir() -> Option<PathBuf> {
     #[cfg(windows)]
     {
@@ -103,12 +99,39 @@ pub fn config_dir() -> Option<PathBuf> {
             .map(|base| base.join("qrgen_rust"))
     }
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
     {
-        std::env::var_os("XDG_CONFIG_HOME")
+        std::env::var_os("HOME")
             .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
-            .map(|base| base.join("qrgen_rust"))
+            .map(|home| home.join("Library").join("Application Support").join("qrgen_rust"))
+    }
+
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    {
+        xdg_config_dir()
+    }
+}
+
+#[cfg(not(windows))]
+fn xdg_config_dir() -> Option<PathBuf> {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .map(|base| base.join("qrgen_rust"))
+}
+
+/// Dawna lokalizacja ustawien na macOS (~/.config/qrgen_rust) - uzywana tylko
+/// do jednorazowego odczytu, gdy w nowym miejscu nie ma jeszcze pliku.
+/// Na pozostalych systemach None.
+pub fn legacy_config_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        xdg_config_dir()
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
     }
 }
 

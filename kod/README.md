@@ -22,7 +22,8 @@ systemów (np. ERP) przez argumenty CLI lub plik JSON.
 - dostosowywać rozdzielczość (docelowy bok obrazu w px lub skalę), ramkę,
   korekcję błędów i kolory (okno „Ustawienia”),
 - kopiować dane lub wygenerowany obraz do schowka, otwierać i drukować pliki,
-- zapamiętywać ustawienia i zawartość formularzy między uruchomieniami
+- zapamiętywać ustawienia i zawartość formularzy między uruchomieniami (Windows: `%APPDATA%\qrgen_rust`, macOS: `~/Library/Application Support/qrgen_rust`, Linux: `~/.config/qrgen_rust`;
+  dawne ustawienia z `~/.config` na macOS są wczytywane automatycznie)
   (`settings.json`; stary `settings.txt` jest migrowany automatycznie).
 
 ## Tryby działania

@@ -97,21 +97,26 @@ fn settings_json_path() -> Option<PathBuf> {
     platform::config_dir().map(|dir| dir.join("settings.json"))
 }
 
-fn legacy_settings_path() -> Option<PathBuf> {
-    platform::config_dir().map(|dir| dir.join("settings.txt"))
-}
-
 /// Wczytuje ustawienia. Kolejnosc: settings.json, potem (jednorazowa migracja)
 /// stary settings.txt, na koncu wartosci domyslne. Bledne pola w JSON sa
-/// pomijane pojedynczo.
+/// pomijane pojedynczo. Na macOS, gdy w nowym katalogu nic nie ma, czytamy
+/// jeszcze dawna lokalizacje ~/.config/qrgen_rust (zapis idzie juz do nowej).
 pub fn load() -> Settings {
-    if let Some(path) = settings_json_path() {
-        if let Ok(text) = fs::read_to_string(&path) {
+    let dirs: Vec<PathBuf> = [platform::config_dir(), platform::legacy_config_dir()]
+        .into_iter()
+        .flatten()
+        .collect();
+    load_from_dirs(&dirs)
+}
+
+/// Pierwszy katalog z ustawieniami wygrywa; w obrebie katalogu settings.json
+/// ma pierwszenstwo przed starym settings.txt.
+fn load_from_dirs(dirs: &[PathBuf]) -> Settings {
+    for dir in dirs {
+        if let Ok(text) = fs::read_to_string(dir.join("settings.json")) {
             return from_json_lenient(&text);
         }
-    }
-    if let Some(legacy) = legacy_settings_path() {
-        if let Ok(text) = fs::read_to_string(&legacy) {
+        if let Ok(text) = fs::read_to_string(dir.join("settings.txt")) {
             return migrate_legacy(&text);
         }
     }
@@ -273,6 +278,27 @@ mod tests {
         assert_eq!(s.border, 7);
         assert_eq!(s.ecc, "H");
         assert_eq!(s.output_dir, "/tmp/x");
+    }
+
+    #[test]
+    fn first_directory_with_settings_wins() {
+        let base = std::env::temp_dir().join(format!("qrgen_cfg_{}", std::process::id()));
+        let (new_dir, old_dir) = (base.join("new"), base.join("old"));
+        fs::create_dir_all(&new_dir).unwrap();
+        fs::create_dir_all(&old_dir).unwrap();
+
+        // tylko stara lokalizacja (macOS po aktualizacji): czytamy z niej
+        fs::write(old_dir.join("settings.json"), r#"{ "scale": 7 }"#).unwrap();
+        let dirs = [new_dir.clone(), old_dir.clone()];
+        assert_eq!(load_from_dirs(&dirs).scale, 7);
+
+        // nowa lokalizacja ma pierwszenstwo
+        fs::write(new_dir.join("settings.json"), r#"{ "scale": 3 }"#).unwrap();
+        assert_eq!(load_from_dirs(&dirs).scale, 3);
+
+        // brak plikow: domyslne
+        assert_eq!(load_from_dirs(&[base.join("pusty")]).scale, Settings::default().scale);
+        fs::remove_dir_all(&base).ok();
     }
 
     #[test]
