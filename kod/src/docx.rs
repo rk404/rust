@@ -1,11 +1,21 @@
 use crate::formats::VCardData;
 use std::io::Write;
 
-/// Escaping tekstu wstawianego do XML.
+/// Czy znak jest dozwolony w XML 1.0 (tabulacja, nowa linia, CR oraz znaki
+/// od U+0020 z wylaczeniem zakresu zastepczego i U+FFFE/U+FFFF). Pozostale
+/// znaki sterujace - np. wklejone z innych systemow - powoduja w Wordzie
+/// komunikat o nieczytelnej zawartosci.
+fn is_xml_char(c: char) -> bool {
+    matches!(c, '\t' | '\n' | '\r' | '\u{20}'..='\u{D7FF}' | '\u{E000}'..='\u{FFFD}' | '\u{10000}'..='\u{10FFFF}')
+}
+
+/// Escaping tekstu wstawianego do XML. Znaki niedozwolone w XML sa pomijane,
+/// a tabulacje i konce linii zamieniane na spacje (akapit to jedna linia).
 fn xml_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
+    for c in s.chars().filter(|c| is_xml_char(*c)) {
         match c {
+            '\t' | '\n' | '\r' => out.push(' '),
             '&' => out.push_str("&amp;"),
             '<' => out.push_str("&lt;"),
             '>' => out.push_str("&gt;"),
@@ -99,7 +109,7 @@ pub fn build_business_card_docx(v: &VCardData) -> Result<Vec<u8>, String> {
     let body: String = document_paragraphs(v).concat();
     let document = format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{body}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1417" w:right="1417" w:bottom="1417" w:left="1417"/></w:sectPr></w:body></w:document>"#
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{body}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1417" w:right="1417" w:bottom="1417" w:left="1417" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr></w:body></w:document>"#
     );
 
     let mut buffer = std::io::Cursor::new(Vec::new());
@@ -197,6 +207,33 @@ mod tests {
         let xml = document_xml(&build_business_card_docx(&sample()).unwrap());
         assert!(xml.contains("<w:b/><w:sz w:val=\"22\"/>"));
         assert!(!xml.contains("<w:sz w:val=\"22\"/><w:b/>"));
+    }
+
+    #[test]
+    fn page_margins_have_all_required_attributes() {
+        // Schemat OOXML wymaga wszystkich siedmiu atrybutow w <w:pgMar>.
+        let xml = document_xml(&build_business_card_docx(&sample()).unwrap());
+        for attr in [
+            "w:top=", "w:right=", "w:bottom=", "w:left=", "w:header=", "w:footer=", "w:gutter=",
+        ] {
+            assert!(xml.contains(attr), "brak {attr}");
+        }
+    }
+
+    #[test]
+    fn control_characters_are_removed_and_line_breaks_flattened() {
+        let mut data = sample();
+        data.last_name = "Kow\u{0}al\u{1}ski\u{b}\nSyn\tX\u{FFFE}".to_string();
+        let xml = document_xml(&build_business_card_docx(&data).unwrap());
+        assert!(xml.contains("Jan Kowalski Syn X"), "{xml}");
+        assert!(xml.chars().all(is_xml_char), "w XML zostaly niedozwolone znaki");
+    }
+
+    #[test]
+    fn xml_char_rules() {
+        assert!(is_xml_char('a') && is_xml_char('ą') && is_xml_char('\u{1F600}'));
+        assert!(is_xml_char('\n') && is_xml_char('\t'));
+        assert!(!is_xml_char('\u{0}') && !is_xml_char('\u{b}') && !is_xml_char('\u{FFFE}'));
     }
 
     #[test]
