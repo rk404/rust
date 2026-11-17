@@ -7,6 +7,7 @@ systemów (np. ERP) przez argumenty CLI lub plik JSON.
 
 ## Co potrafi aplikacja
 
+- pokazywać **podgląd na żywo** (w pamięci, bez zapisu) i zapisywać plik dopiero przyciskiem „Zapisz”,
 - generować kod QR dla formatów: **Tekst**, **vCard** (wizytówka), **Link**, **E-mail**,
 - dla vCard generować dodatkowo **dokument Word (.docx)** z danymi do wizytówki
   (blok polski oraz — gdy podano stanowisko po angielsku — blok angielski),

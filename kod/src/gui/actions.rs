@@ -21,8 +21,8 @@ impl QrGenApp {
                 .num_columns(3)
                 .spacing([8.0, 8.0])
                 .show(ui, |ui| {
-                    if action_button(ui, "⚡ Generuj", true) {
-                        self.generate(ui.ctx());
+                    if action_button(ui, "💾 Zapisz", !self.saved_is_current && self.preview.is_some()) {
+                        self.save();
                     }
                     if action_button(ui, "📋 Kopiuj dane", true) {
                         self.copy_data_to_clipboard(ui.ctx(), kind);
@@ -44,7 +44,7 @@ impl QrGenApp {
                         }
                     }
 
-                    let file_ready = self.preview_is_current
+                    let file_ready = self.saved_is_current
                         && self
                             .last_saved_image
                             .as_ref()

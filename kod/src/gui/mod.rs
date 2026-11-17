@@ -22,6 +22,9 @@ use std::time::{Duration, Instant};
 
 const SIDE_BY_SIDE_MIN_WIDTH: f32 = 680.0;
 
+/// Rozmiar modulu w podgladzie na zywo (px) - niezalezny od ustawien zapisu.
+const PREVIEW_SCALE: u32 = 8;
+
 /// Najwiekszy bok tekstury wysylanej do GPU. Wiele kart graficznych (i
 /// sterownikow programowych) ma limit 8192 px, a duze obrazy zjadaja pamiec -
 /// podglad i miniatury zawsze zmniejszamy do tego rozmiaru.
@@ -137,8 +140,14 @@ pub struct QrGenApp {
     docx_enabled: bool,
 
     status: String,
+    /// Podglad na zywo (tylko w pamieci - nie zapisuje niczego na dysk).
     preview: Option<egui::TextureHandle>,
-    preview_is_current: bool,
+    /// Podglad jest nieaktualny wzgledem formularza/wygladu i wymaga odswiezenia.
+    preview_dirty: bool,
+    /// Komunikat zamiast podgladu (brak danych lub blad kodowania).
+    preview_message: Option<(String, bool)>,
+    /// Czy ostatnio zapisany plik odpowiada biezacym danym.
+    saved_is_current: bool,
     last_saved_image: Option<PathBuf>,
     last_saved_docx: Option<PathBuf>,
 
@@ -194,7 +203,9 @@ impl QrGenApp {
             docx_enabled: job.docx,
             status: String::new(),
             preview: None,
-            preview_is_current: false,
+            preview_dirty: true,
+            preview_message: None,
+            saved_is_current: false,
             last_saved_image: None,
             last_saved_docx: None,
             settings_open: false,
@@ -219,7 +230,7 @@ impl QrGenApp {
         if job.content_provided {
             if let View::Form(kind) = app.view {
                 if app.forms.has_data(kind) {
-                    app.generate(&cc.egui_ctx);
+                    app.save();
                 }
             }
         }
@@ -340,9 +351,61 @@ impl QrGenApp {
         ctx.request_repaint_after(Duration::from_secs(2));
     }
 
+    /// Dane lub wyglad sie zmienily: podglad zostanie odswiezony w nastepnej
+    /// klatce, a zapisany plik przestaje odpowiadac formularzowi.
     fn invalidate_preview(&mut self) {
-        self.preview = None;
-        self.preview_is_current = false;
+        self.preview_dirty = true;
+        self.saved_is_current = false;
+    }
+
+    /// Odswieza podglad na zywo, gdy dane sie zmienily. Renderuje w pamieci,
+    /// ze stala, niewielka skala - niezaleznie od docelowego rozmiaru pliku,
+    /// wiec nawet przy duzych ustawieniach wpisywanie pozostaje plynne.
+    fn refresh_preview(&mut self, ctx: &egui::Context) {
+        if !self.preview_dirty {
+            return;
+        }
+        self.preview_dirty = false;
+        let Some(kind) = self.active_format() else {
+            self.preview = None;
+            self.preview_message = None;
+            return;
+        };
+        let payload = match self.forms.payload(kind) {
+            Ok(p) => p,
+            Err(_) => {
+                self.preview = None;
+                self.preview_message =
+                    Some(("Wpisz dane, aby zobaczyć podgląd kodu.".to_string(), false));
+                return;
+            }
+        };
+        let preview_appearance = Appearance {
+            scale: PREVIEW_SCALE,
+            target_px: 0,
+            ..self.appearance
+        };
+        match crate::render::render_image(&payload, &preview_appearance) {
+            Ok(img) => {
+                let rgba = image::DynamicImage::ImageRgb8(img.clone()).to_rgba8();
+                let color_image = texture_image(
+                    rgba.as_raw(),
+                    img.width() as usize,
+                    img.height() as usize,
+                    true,
+                );
+                self.preview = Some(ctx.load_texture(
+                    "qr_preview",
+                    color_image,
+                    egui::TextureOptions::NEAREST,
+                ));
+                self.preview_message = None;
+            }
+            Err(e) => {
+                self.preview = None;
+                self.preview_message = Some((format!("Nie można utworzyć kodu: {e}"), true));
+            }
+        }
     }
 
     /// Trwaly uchwyt do schowka - tworzony raz (na X11/Wayland natychmiastowe
@@ -360,32 +423,26 @@ impl QrGenApp {
         self.clipboard.as_mut()
     }
 
-    /// Generuje kod QR: podglad + zapis obrazu (dla vCard takze .docx).
-    fn generate(&mut self, ctx: &egui::Context) {
+    /// Zapisuje kod QR na dysk w docelowej rozdzielczosci (dla vCard takze .docx).
+    /// Podglad na zywo jest niezalezny od zapisu.
+    fn save(&mut self) {
         let Some(kind) = self.active_format() else {
             return;
         };
         let payload = match self.forms.payload(kind) {
             Ok(p) => p,
             Err(e) => {
-                self.invalidate_preview();
                 self.status = format!("Błąd: {e}");
                 return;
             }
         };
-
         let img = match crate::render::render_image(&payload, &self.appearance) {
             Ok(img) => img,
             Err(e) => {
-                self.invalidate_preview();
                 self.status = format!("Błąd: {e}");
                 return;
             }
         };
-        let rgba = image::DynamicImage::ImageRgb8(img.clone()).to_rgba8();
-        let color_image =
-            texture_image(rgba.as_raw(), img.width() as usize, img.height() as usize, true);
-        let texture = ctx.load_texture("qr_preview", color_image, egui::TextureOptions::NEAREST);
 
         let stem = self.current_stem(kind);
         let vcard_for_docx =
@@ -403,8 +460,7 @@ impl QrGenApp {
 
         match output::save_rendered(&request, &img) {
             Ok(result) => {
-                self.preview = Some(texture);
-                self.preview_is_current = true;
+                self.saved_is_current = true;
                 self.status = match &result.docx_path {
                     Some(docx) => format!(
                         "Zapisano: {} oraz {}",
@@ -417,10 +473,7 @@ impl QrGenApp {
                 self.last_saved_docx = result.docx_path;
                 self.persist_settings();
             }
-            Err(e) => {
-                self.invalidate_preview();
-                self.status = format!("Błąd zapisu: {e}");
-            }
+            Err(e) => self.status = format!("Błąd zapisu: {e}"),
         }
     }
 
@@ -590,6 +643,7 @@ impl eframe::App for QrGenApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.sync_theme(ui.ctx());
         self.handle_dropped_files(ui.ctx());
+        self.refresh_preview(&ui.ctx().clone());
 
         let ctx = ui.ctx().clone();
         egui::CentralPanel::default().show(ui, |ui| {
