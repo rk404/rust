@@ -174,6 +174,11 @@ Wszystkie zależności są pobierane automatycznie przez `cargo build`.
 
 ## Uwagi
 
+- Interfejs używa czcionki systemowej (Windows: Segoe UI, macOS: San Francisco lub Arial,
+  Linux: Noto Sans, Cantarell, DejaVu Sans lub Liberation Sans), wczytywanej z dysku.
+  Gdy żadnej nie znajdzie, zostaje wbudowana czcionka egui. Własną czcionkę (TTF/OTF)
+  można wskazać zmienną środowiskową `QRGEN_FONT`.
+
 - Dane w kodzie QR są zapisywane jako UTF-8 (tryb bajtowy, bez nagłówka ECI) —
   poprawność polskich znaków potwierdza test round-trip.
 - Odczyt kodów QR działa najlepiej na zrzutach ekranu i skanach; zdjęcia
