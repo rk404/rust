@@ -59,12 +59,16 @@ pub fn windows_uses_light_theme() -> bool {
 }
 
 /// Folder Dokumenty uzytkownika - domyslna lokalizacja zapisu.
+/// Na Windows pytamy system o folder znany (uwzglednia przekierowanie
+/// OneDrive i zmienione lokalizacje), z awaryjnym `%USERPROFILE%\\Documents`.
 pub fn documents_dir() -> Option<PathBuf> {
     #[cfg(windows)]
     {
-        std::env::var_os("USERPROFILE")
-            .map(PathBuf::from)
-            .map(|base| base.join("Documents"))
+        known_documents_folder().or_else(|| {
+            std::env::var_os("USERPROFILE")
+                .map(PathBuf::from)
+                .map(|base| base.join("Documents"))
+        })
     }
 
     #[cfg(not(windows))]
@@ -72,6 +76,20 @@ pub fn documents_dir() -> Option<PathBuf> {
         std::env::var_os("HOME")
             .map(PathBuf::from)
             .map(|base| base.join("Documents"))
+    }
+}
+
+#[cfg(windows)]
+fn known_documents_folder() -> Option<PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows::Win32::System::Com::CoTaskMemFree;
+    use windows::Win32::UI::Shell::{FOLDERID_Documents, SHGetKnownFolderPath, KF_FLAG_DEFAULT};
+
+    unsafe {
+        let pwstr = SHGetKnownFolderPath(&FOLDERID_Documents, KF_FLAG_DEFAULT, None).ok()?;
+        let path = std::ffi::OsString::from_wide(pwstr.as_wide());
+        CoTaskMemFree(Some(pwstr.0 as *const _));
+        (!path.is_empty()).then(|| PathBuf::from(path))
     }
 }
 

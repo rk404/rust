@@ -380,7 +380,7 @@ impl QrGenApp {
             overwrite: self.overwrite,
         };
 
-        match output::generate_and_save(&request) {
+        match output::save_rendered(&request, &img) {
             Ok(result) => {
                 self.preview = Some(texture);
                 self.preview_is_current = true;
