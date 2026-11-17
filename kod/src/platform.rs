@@ -133,36 +133,36 @@ pub fn print_file(path: &Path) -> Result<(), String> {
 
     #[cfg(windows)]
     {
-        let escaped_path = path.display().to_string().replace('"', "''");
-        let script = format!(
-            r#"
+        // Sciezka trafia do skryptu przez zmienna srodowiskowa, a nie przez
+        // wklejenie w tresc skryptu - dzieki temu apostrofy i inne znaki
+        // w nazwie katalogu nie psuja skryptu ani nie pozwalaja wstrzyknac polecen.
+        let script = r#"
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.Windows.Forms
-$path = [System.IO.Path]::GetFullPath('{escaped_path}')
-if (-not (Test-Path -LiteralPath $path)) {{ throw 'Plik nie istnieje.' }}
+$path = [System.IO.Path]::GetFullPath($env:QRGEN_PRINT_PATH)
+if (-not (Test-Path -LiteralPath $path)) { throw 'Plik nie istnieje.' }
 $img = [System.Drawing.Image]::FromFile($path)
-try {{
+try {
     $doc = New-Object System.Drawing.Printing.PrintDocument
     $doc.DocumentName = [System.IO.Path]::GetFileName($path)
-    $doc.Add_PrintPage({{
+    $doc.Add_PrintPage({
         param($sender, $e)
         $e.Graphics.DrawImage($img, 0, 0, $e.PageBounds.Width, $e.PageBounds.Height)
-    }})
+    })
 
     $printDialog = New-Object System.Windows.Forms.PrintDialog
     $printDialog.UseEXDialog = $true
     $printDialog.Document = $doc
-    if ($printDialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) {{
+    if ($printDialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) {
         exit 0
-    }}
+    }
 
     $doc.Print()
-}} finally {{
-    if ($img) {{ $img.Dispose() }}
-}}
-"#
-        );
+} finally {
+    if ($img) { $img.Dispose() }
+}
+"#;
 
         Command::new("powershell.exe")
             .args([
@@ -174,8 +174,9 @@ try {{
                 "-WindowStyle",
                 "Hidden",
                 "-Command",
-                &script,
+                script,
             ])
+            .env("QRGEN_PRINT_PATH", path)
             .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .spawn()
             .map(|_| ())
