@@ -11,6 +11,9 @@ use std::path::PathBuf;
 pub struct CliArgs {
     pub help: bool,
     pub silent: bool,
+    /// W trybie --silent uzyj lokalnego settings.json (domyslnie ignorowany,
+    /// zeby wynik wywolania z ERP nie zalezal od komputera).
+    pub use_settings: bool,
     /// Okno deweloperskie do strojenia interfejsu (tylko GUI).
     pub debug_ui: bool,
     pub format: Option<FormatKind>,
@@ -75,6 +78,7 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
             "--" => only_positional = true,
             "-h" | "--help" => cli.help = true,
             "-s" | "--silent" => cli.silent = true,
+            "--use-settings" => cli.use_settings = true,
             "--debug-ui" => cli.debug_ui = true,
             "--overwrite" => cli.overwrite = Some(true),
             "--no-docx" => cli.docx = Some(false),
@@ -177,6 +181,8 @@ pub fn usage() -> String {
         "  --overwrite           Nadpisuj istniejące pliki (domyślnie: dokleja _2, _3, ...)",
         "  --no-docx             (vcard) nie generuj dokumentu Word",
         "  --                    koniec flag; reszta to dane tekstowe (np. tekst zaczynający się od -)",
+        "  --use-settings        (--silent) uwzględnij lokalny settings.json; domyślnie jest",
+        "                        pomijany, żeby wynik nie zależał od komputera",
         "  -h, --help            Wyświetla tę pomoc",
         "  --debug-ui            Okno deweloperskie GUI (podgląd układu, edycja stylu)",
         "",

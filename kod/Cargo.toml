@@ -2,6 +2,16 @@
 name = "qrgen_rust"
 version = "0.1.0"
 edition = "2021"
+default-run = "qrgen_rust"
+
+# GUI (na Windows bez konsoli) oraz wersja konsolowa dla ERP/skryptow.
+[[bin]]
+name = "qrgen_rust"
+path = "src/main.rs"
+
+[[bin]]
+name = "qrgen-cli"
+path = "src/bin/qrgen-cli.rs"
 
 [dependencies]
 # Kodowanie QR - wylaczamy domyslne funkcje (image/svg/pic), bo renderujemy
