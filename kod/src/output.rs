@@ -120,6 +120,58 @@ pub struct SaveResult {
     pub docx_path: Option<PathBuf>,
 }
 
+/// Jak interpretowana jest jawna sciezka wyjsciowa (-o / pole "output").
+#[derive(Debug, PartialEq, Eq)]
+pub enum OutputTarget {
+    /// Katalog (istniejacy, zakonczony separatorem lub bez rozszerzenia -
+    /// np. ERP podaje katalog, ktory dopiero powstanie).
+    Dir(PathBuf),
+    /// Plik z rozszerzeniem; `dir` = None, gdy podano sama nazwe pliku.
+    File {
+        dir: Option<PathBuf>,
+        stem: String,
+        ext: String,
+    },
+}
+
+/// Rozpoznaje, czy jawna sciezka wskazuje katalog czy plik. Jedyne miejsce
+/// z ta logika - uzywaja jej zarowno zapis (CLI), jak i GUI.
+pub fn classify_output(raw: &str) -> Option<OutputTarget> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(trimmed);
+    let ends_with_sep = trimmed.ends_with('/') || trimmed.ends_with('\\');
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .filter(|e| !e.is_empty());
+    match ext {
+        Some(ext) if !ends_with_sep && !path.is_dir() => {
+            let stem = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let dir = path
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .map(Path::to_path_buf);
+            Some(OutputTarget::File { dir, stem, ext })
+        }
+        _ => Some(OutputTarget::Dir(path)),
+    }
+}
+
+/// Katalog zapisu: wpisany przez uzytkownika lub, gdy pusty, folder Dokumenty.
+pub fn resolve_output_dir(configured: &str) -> PathBuf {
+    let configured = configured.trim();
+    if !configured.is_empty() {
+        return PathBuf::from(configured);
+    }
+    crate::platform::documents_dir().unwrap_or_else(|| PathBuf::from("."))
+}
+
 /// Wyznacza katalog, rdzen i rozszerzenie na podstawie zlecenia.
 fn resolve_targets(req: &SaveRequest) -> Result<(PathBuf, String, String), String> {
     let fallback_stem = {
@@ -130,43 +182,15 @@ fn resolve_targets(req: &SaveRequest) -> Result<(PathBuf, String, String), Strin
             s
         }
     };
-
-    let (dir, stem, ext) = match req.output {
+    let (dir, stem, ext) = match req.output.and_then(classify_output) {
         None => (req.default_dir.clone(), fallback_stem, req.extension.to_string()),
-        Some(raw) => {
-            let trimmed = raw.trim();
-            if trimmed.is_empty() {
-                (req.default_dir.clone(), fallback_stem, req.extension.to_string())
-            } else {
-                let path = PathBuf::from(trimmed);
-                let ends_with_sep = trimmed.ends_with('/') || trimmed.ends_with('\\');
-                let has_extension = path
-                    .extension()
-                    .map(|e| !e.is_empty())
-                    .unwrap_or(false);
-                if ends_with_sep || path.is_dir() || !has_extension {
-                    // Katalog (istniejacy, zakonczony separatorem lub bez
-                    // rozszerzenia - np. ERP podaje katalog, ktory dopiero powstanie).
-                    (path, fallback_stem, req.extension.to_string())
-                } else {
-                    let ext = path
-                        .extension()
-                        .map(|e| e.to_string_lossy().to_lowercase())
-                        .unwrap_or_default();
-                    let stem = path
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().to_string())
-                        .unwrap_or(fallback_stem);
-                    let dir = match path.parent() {
-                        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
-                        _ => req.default_dir.clone(),
-                    };
-                    (dir, stem, ext)
-                }
-            }
-        }
+        Some(OutputTarget::Dir(dir)) => (dir, fallback_stem, req.extension.to_string()),
+        Some(OutputTarget::File { dir, stem, ext }) => (
+            dir.unwrap_or_else(|| req.default_dir.clone()),
+            if stem.is_empty() { fallback_stem } else { stem },
+            ext,
+        ),
     };
-
     let ext = ext.to_lowercase();
     if !SUPPORTED_EXTENSIONS.contains(&ext.as_str()) {
         return Err(format!(
@@ -175,6 +199,9 @@ fn resolve_targets(req: &SaveRequest) -> Result<(PathBuf, String, String), Strin
     }
     Ok((dir, stem, ext))
 }
+
+/// Zarezerwowane (utworzone, puste) pliki: obraz oraz opcjonalnie docx.
+type Reserved = (PathBuf, fs::File, Option<(PathBuf, fs::File)>);
 
 /// Rezerwuje nazwy plikow, tworzac je atomowo (`create_new`): przy kolizji
 /// dokleja "_2", "_3", ... Obraz i docx zawsze dostaja ten sam sufiks,
@@ -187,7 +214,7 @@ fn reserve_targets(
     ext: &str,
     want_docx: bool,
     overwrite: bool,
-) -> Result<(PathBuf, fs::File, Option<(PathBuf, fs::File)>), String> {
+) -> Result<Reserved, String> {
     let open = |path: &Path| -> std::io::Result<fs::File> {
         let mut options = fs::OpenOptions::new();
         options.write(true);
@@ -384,6 +411,27 @@ mod tests {
         names.dedup();
         assert_eq!(names.len(), 16);
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn classifies_output_paths() {
+        assert_eq!(classify_output("  "), None);
+        assert_eq!(
+            classify_output("/dane/wizytowki/"),
+            Some(OutputTarget::Dir(PathBuf::from("/dane/wizytowki/")))
+        );
+        assert_eq!(
+            classify_output("/dane/wizytowki"),
+            Some(OutputTarget::Dir(PathBuf::from("/dane/wizytowki")))
+        );
+        assert_eq!(
+            classify_output("kod.PNG"),
+            Some(OutputTarget::File {
+                dir: None,
+                stem: "kod".into(),
+                ext: "png".into()
+            })
+        );
     }
 
     #[test]

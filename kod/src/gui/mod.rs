@@ -241,30 +241,20 @@ impl QrGenApp {
                 std::env::current_dir().map(|cwd| cwd.join(&p)).unwrap_or(p)
             }
         };
-        let trimmed = &path.display().to_string();
-        let path = PathBuf::from(trimmed);
-        let ends_with_sep = trimmed.ends_with('/') || trimmed.ends_with('\\');
-        let has_extension = path
-            .extension()
-            .map(|e| !e.is_empty())
-            .unwrap_or(false);
-        if ends_with_sep || path.is_dir() || !has_extension {
-            self.output_dir = trimmed.to_string();
-            return;
-        }
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                self.output_dir = parent.display().to_string();
+        match output::classify_output(&path.display().to_string()) {
+            Some(output::OutputTarget::Dir(dir)) => self.output_dir = dir.display().to_string(),
+            Some(output::OutputTarget::File { dir, stem, ext }) => {
+                if let Some(dir) = dir {
+                    self.output_dir = dir.display().to_string();
+                }
+                if !stem.is_empty() {
+                    self.file_stem = stem;
+                }
+                if output::SUPPORTED_EXTENSIONS.contains(&ext.as_str()) {
+                    self.image_ext = ext;
+                }
             }
-        }
-        if let Some(stem) = path.file_stem() {
-            self.file_stem = stem.to_string_lossy().to_string();
-        }
-        if let Some(ext) = path.extension() {
-            let ext = ext.to_string_lossy().to_lowercase();
-            if output::SUPPORTED_EXTENSIONS.contains(&ext.as_str()) {
-                self.image_ext = ext;
-            }
+            None => {}
         }
     }
 
@@ -277,10 +267,7 @@ impl QrGenApp {
 
     /// Katalog zapisu z uwzglednieniem domyslnego (Dokumenty).
     fn resolved_output_dir(&self) -> PathBuf {
-        if !self.output_dir.trim().is_empty() {
-            return PathBuf::from(self.output_dir.trim());
-        }
-        platform::documents_dir().unwrap_or_else(|| PathBuf::from("."))
+        output::resolve_output_dir(&self.output_dir)
     }
 
     /// Rdzen nazwy pliku dla aktywnego formatu.
