@@ -1,78 +1,92 @@
-use super::QrGenApp;
+use super::{widgets, QrGenApp};
 use eframe::egui;
 
 impl QrGenApp {
+    /// Formularz wizytowki podzielony na sekcje; krotkie pola w kolumnach.
     pub(super) fn show_vcard_form(&mut self, ui: &mut egui::Ui) {
-        ui.group(|ui| {
-            let mut clear = false;
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("📇 Dane wizytówki (vCard)").strong());
-                clear = super::clear_button(ui);
-            });
-            if clear {
-                self.forms.vcard = Default::default();
-                self.invalidate_preview();
-                self.status = "Wyczyszczono dane wizytówki.".to_string();
-            }
-            ui.add_space(4.0);
+        let mut changed = false;
+        {
+            let v = &mut self.forms.vcard;
 
-            let mut changed = false;
-            {
-                let v = &mut self.forms.vcard;
-                changed |= super::form_singleline(ui, "Imię:", &mut v.first_name, "Jan");
-                changed |= super::form_singleline(ui, "Nazwisko:", &mut v.last_name, "Kowalski");
+            widgets::section_title(ui, "Osoba");
+            ui.columns(2, |c| {
+                changed |= widgets::text_field(&mut c[0], "Imię", &mut v.first_name, "Jan");
+                changed |= widgets::text_field(&mut c[1], "Nazwisko", &mut v.last_name, "Kowalski");
+            });
+
+            ui.add_space(8.0);
+            widgets::section_title(ui, "Kontakt");
+            ui.columns(2, |c| {
                 changed |=
-                    super::form_singleline(ui, "Numer telefonu:", &mut v.phone_work, "58 307 00 00");
-                changed |= super::form_singleline(
-                    ui,
-                    "Telefon komórkowy:",
+                    widgets::text_field(&mut c[0], "Telefon", &mut v.phone_work, "58 307 00 00");
+                changed |= widgets::text_field(
+                    &mut c[1],
+                    "Telefon komórkowy",
                     &mut v.phone_mobile,
                     "600 000 000",
                 );
-                changed |=
-                    super::form_singleline(ui, "E-mail:", &mut v.email, "jan.kowalski@firma.pl");
-                changed |= super::form_singleline(
-                    ui,
-                    "Strona WWW (URL):",
-                    &mut v.website,
-                    "https://firma.pl",
+            });
+            ui.columns(2, |c| {
+                changed |= widgets::text_field(
+                    &mut c[0],
+                    "E-mail",
+                    &mut v.email,
+                    "jan.kowalski@firma.pl",
                 );
-                changed |= super::form_singleline(ui, "Firma:", &mut v.company, "");
-                changed |= super::form_singleline(
-                    ui,
-                    "Stanowisko:",
+                changed |= widgets::text_field(&mut c[1], "Fax", &mut v.fax, "");
+            });
+            changed |= widgets::text_field(ui, "Strona WWW", &mut v.website, "https://firma.pl");
+
+            ui.add_space(8.0);
+            widgets::section_title(ui, "Firma");
+            changed |= widgets::text_field(ui, "Nazwa firmy", &mut v.company, "");
+            ui.columns(2, |c| {
+                changed |= widgets::text_field(
+                    &mut c[0],
+                    "Stanowisko",
                     &mut v.title_pl,
                     "Kierownik Logistyki Dostaw",
                 );
-                changed |= super::form_singleline(
-                    ui,
-                    "Stanowisko (EN):",
+                changed |= widgets::text_field(
+                    &mut c[1],
+                    "Stanowisko (EN)",
                     &mut v.title_en,
                     "Supply Chain Manager",
                 );
-                changed |= super::form_singleline(ui, "Fax:", &mut v.fax, "");
-                changed |= super::form_singleline(ui, "Adres:", &mut v.street, "ul. Portowa 1");
-                changed |= super::form_singleline(ui, "Miasto:", &mut v.city, "Gdańsk");
-                changed |= super::form_singleline(ui, "Kod pocztowy:", &mut v.postal_code, "80-001");
-                changed |= super::form_singleline(ui, "Kraj:", &mut v.country, "Polska");
-            }
-            if changed {
-                self.invalidate_preview();
-            }
+            });
 
-            ui.add_space(4.0);
-            ui.checkbox(
-                &mut self.docx_enabled,
-                "Generuj dokument Word (.docx) z danymi do wizytówki",
-            );
-            ui.label(
-                egui::RichText::new(
-                    "Blok angielski w dokumencie powstaje tylko, gdy podano Stanowisko (EN).",
-                )
-                .small()
-                .weak(),
-            );
-        });
-        self.show_target_path_hint(ui);
+            ui.add_space(8.0);
+            widgets::section_title(ui, "Adres");
+            changed |= widgets::text_field(ui, "Ulica i numer", &mut v.street, "ul. Portowa 1");
+            ui.columns(3, |c| {
+                changed |=
+                    widgets::text_field(&mut c[0], "Kod pocztowy", &mut v.postal_code, "80-001");
+                changed |= widgets::text_field(&mut c[1], "Miasto", &mut v.city, "Gdańsk");
+                changed |= widgets::text_field(&mut c[2], "Kraj", &mut v.country, "Polska");
+            });
+        }
+        if changed {
+            self.invalidate_preview();
+        }
+
+        ui.add_space(12.0);
+        egui::Frame::new()
+            .fill(ui.visuals().faint_bg_color)
+            .corner_radius(8.0)
+            .inner_margin(12.0)
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.checkbox(
+                    &mut self.docx_enabled,
+                    "Zapisz też dokument Word (.docx) z danymi do wizytówki",
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "Blok angielski w dokumencie powstaje tylko, gdy podano Stanowisko (EN).",
+                    )
+                    .small()
+                    .weak(),
+                );
+            });
     }
 }

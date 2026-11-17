@@ -67,6 +67,31 @@ pub fn parse_hex_color(s: &str) -> Option<[u8; 3]> {
     Some([r, g, b])
 }
 
+/// Skala (px na modul) i bok obrazu w px dla kodu o `modules` modulach
+/// (bez ramki) przy zadanym wygladzie. Blad, gdy obraz przekroczylby limity.
+pub fn image_side(modules: u32, ap: &Appearance) -> Result<(u32, u32), String> {
+    let total = modules
+        .checked_add(ap.border.checked_mul(2).ok_or("ramka zbyt duza")?)
+        .ok_or("ramka zbyt duza")?;
+    // Docelowa rozdzielczosc: skala = najwiekszy calkowity mnoznik, przy ktorym
+    // obraz nie przekracza zadanego boku (kod QR wymaga calkowitej liczby
+    // pikseli na modul, wiec dokladna wartosc nie zawsze jest osiagalna).
+    let scale = if ap.target_px > 0 {
+        (ap.target_px / total).clamp(1, MAX_SCALE)
+    } else {
+        ap.scale
+    };
+    let dim = total
+        .checked_mul(scale)
+        .ok_or("wynikowy obraz bylby zbyt duzy")?;
+    if dim > MAX_DIM {
+        return Err(format!(
+            "wynikowy obraz mialby {dim}x{dim} px (limit {MAX_DIM}); zmniejsz skale lub ramke"
+        ));
+    }
+    Ok((scale, dim))
+}
+
 /// Koduje dane i renderuje kod QR jako obraz RGB, z uwzglednieniem
 /// skali (rozmiar modulu w pikselach), ramki (w modulach) i kolorow.
 ///
@@ -92,25 +117,7 @@ pub fn render_image(payload: &str, ap: &Appearance) -> Result<RgbImage, String> 
         .map_err(|e| format!("nie udalo sie zakodowac danych: {:?}", e))?;
 
     let size = code.width() as u32;
-    let modules = size
-        .checked_add(ap.border.checked_mul(2).ok_or("ramka zbyt duza")?)
-        .ok_or("ramka zbyt duza")?;
-    // Docelowa rozdzielczosc: skala = najwiekszy calkowity mnoznik, przy ktorym
-    // obraz nie przekracza zadanego boku (kod QR wymaga calkowitej liczby
-    // pikseli na modul, wiec dokladna wartosc nie zawsze jest osiagalna).
-    let scale = if ap.target_px > 0 {
-        (ap.target_px / modules).clamp(1, MAX_SCALE)
-    } else {
-        ap.scale
-    };
-    let dim = modules
-        .checked_mul(scale)
-        .ok_or("wynikowy obraz bylby zbyt duzy")?;
-    if dim > MAX_DIM {
-        return Err(format!(
-            "wynikowy obraz mialby {dim}x{dim} px (limit {MAX_DIM}); zmniejsz skale lub ramke"
-        ));
-    }
+    let (scale, dim) = image_side(size, ap)?;
 
     let mut img = RgbImage::new(dim, dim);
     let fill = Rgb(ap.fill);

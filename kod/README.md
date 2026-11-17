@@ -28,8 +28,10 @@ systemów (np. ERP) przez argumenty CLI lub plik JSON.
 
 ## Tryby działania
 
-1. **Brak argumentów** → GUI z ekranem wyboru formatu; u góry nawigacja
-   `Tekst | vCard | Link | E-mail | Odczyt QR` oraz przycisk „Ustawienia”.
+1. **Brak argumentów** → GUI. U góry przełącznik trybu `Generuj | Odczyt` i przycisk
+   „Ustawienia”. W trybie Generuj po lewej formularz z przełącznikiem formatu
+   (`Tekst | vCard | Link | E-mail`), po prawej podgląd na żywo, wygląd kodu i
+   przycisk „Zapisz” (Ctrl+S). Na dole pasek stanu z odnośnikami do plików.
 2. **Argumenty bez `--silent`** → GUI otwiera się od razu na wskazanym
    formularzu z wypełnionymi polami i generuje pliki.
 3. **Argumenty z `--silent`** → tryb konsolowy bez okna (dla ERP/skryptów);
@@ -143,8 +145,8 @@ src/
 ├── decode.rs      – odczyt kodów QR z obrazów (rqrr)
 ├── settings.rs    – settings.json + migracja starego settings.txt
 ├── platform.rs    – integracje systemowe (konsola, motyw, otwieranie, druk)
-└── gui/           – interfejs (nawigacja, ekran startowy, formularze,
-                     okno Ustawień, widok odczytu, podgląd)
+└── gui/           – interfejs (układ okna, widżety, motyw, formularze,
+                     podgląd z wyglądem kodu, widok odczytu, okno Ustawień)
 ```
 
 ## Budowanie i testy

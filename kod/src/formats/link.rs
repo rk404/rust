@@ -40,6 +40,13 @@ fn has_scheme(url: &str) -> bool {
 }
 
 impl LinkForm {
+    /// Czy odczytany tekst wyglada na pojedynczy adres z jawnym schematem
+    /// (http://, https://, ftp:// ...). Takie dane trafiaja do formularza Link.
+    pub fn looks_like_url(raw: &str) -> bool {
+        let raw = raw.trim();
+        !raw.is_empty() && !raw.contains(char::is_whitespace) && raw.contains("://")
+    }
+
     /// Znormalizowany adres: gdy brak schematu, doklejamy https:// -
     /// takie adresy wpisuje sie najczesciej.
     pub fn normalized_url(&self) -> String {
@@ -117,6 +124,15 @@ mod tests {
             link("firma.pl:8443/panel").payload().unwrap(),
             "https://firma.pl:8443/panel"
         );
+    }
+
+    #[test]
+    fn detects_urls_in_decoded_text() {
+        assert!(LinkForm::looks_like_url("https://firma.pl/oferta?a=1"));
+        assert!(LinkForm::looks_like_url("  ftp://serwer/plik "));
+        assert!(!LinkForm::looks_like_url("zwykly tekst https://firma.pl"));
+        assert!(!LinkForm::looks_like_url("tel:+48123456789"));
+        assert!(!LinkForm::looks_like_url(""));
     }
 
     #[test]

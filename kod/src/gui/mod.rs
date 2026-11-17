@@ -6,8 +6,8 @@ mod form_text;
 mod form_vcard;
 mod preview;
 mod settings_window;
-mod start;
 pub mod theme;
+mod widgets;
 
 use crate::cli::Job;
 use crate::decode::DecodedQr;
@@ -18,8 +18,6 @@ use crate::settings::{self, Settings, ThemeMode};
 use eframe::egui;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-
-const SIDE_BY_SIDE_MIN_WIDTH: f32 = 680.0;
 
 /// Rozmiar modulu w podgladzie na zywo (px) - niezalezny od ustawien zapisu.
 const PREVIEW_SCALE: u32 = 8;
@@ -57,59 +55,9 @@ pub(crate) fn texture_image(
     egui::ColorImage::from_rgba_unmultiplied([new_w as usize, new_h as usize], small.as_raw())
 }
 
-/// Wspolna geometria formularzy - identyczna na kazdej zakladce.
-const LABEL_WIDTH: f32 = 150.0;
-const FIELD_HEIGHT: f32 = 24.0;
-
-/// Przycisk "Wyczyść" dokowany do prawej krawędzi biezacego wiersza.
-/// Zwraca true po kliknięciu.
-fn clear_button(ui: &mut egui::Ui) -> bool {
-    let clear_width = 70.0;
-    ui.add_space((ui.available_width() - clear_width).max(0.0));
-    ui.add_sized([clear_width, 20.0], egui::Button::new("Wyczyść"))
-        .clicked()
-}
-
-/// Wiersz formularza: etykieta w stalej kolumnie + pole rozciagniete
-/// do prawej krawedzi (responsywne). Zwraca true, gdy wartosc sie zmienila.
-fn form_singleline(ui: &mut egui::Ui, label: &str, value: &mut String, hint: &str) -> bool {
-    let mut changed = false;
-    ui.horizontal(|ui| {
-        let used = ui.label(label).rect.width();
-        ui.add_space((LABEL_WIDTH - used).max(0.0));
-        let width = ui.available_width().max(160.0);
-        changed = ui
-            .add_sized(
-                [width, FIELD_HEIGHT],
-                egui::TextEdit::singleline(value).hint_text(hint),
-            )
-            .changed();
-    });
-    changed
-}
-
-/// Jak `form_singleline`, ale z polem wielowierszowym.
-fn form_multiline(ui: &mut egui::Ui, label: &str, value: &mut String, rows: usize) -> bool {
-    let mut changed = false;
-    ui.horizontal_top(|ui| {
-        let used = ui.label(label).rect.width();
-        ui.add_space((LABEL_WIDTH - used).max(0.0));
-        let width = ui.available_width().max(160.0);
-        let height = (rows as f32) * 20.0 + 12.0;
-        changed = ui
-            .add_sized(
-                [width, height],
-                egui::TextEdit::multiline(value).desired_rows(rows),
-            )
-            .changed();
-    });
-    changed
-}
-
 /// Aktywny widok aplikacji.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum View {
-    Start,
     Form(FormatKind),
     Decode,
 }
@@ -118,6 +66,8 @@ enum View {
 #[derive(Default)]
 struct DecodeState {
     result: Option<DecodedQr>,
+    /// Rozpoznany rodzaj tresci (vCard, e-mail, link, tekst).
+    kind: Option<decode_view::DecodedKind>,
     error: Option<String>,
     /// Miniatura wczytanego obrazu.
     texture: Option<egui::TextureHandle>,
@@ -125,8 +75,28 @@ struct DecodeState {
     source: String,
 }
 
+/// Tryb pracy widoczny w pasku gornym.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Generate,
+    Decode,
+}
+
+/// Rodzaj komunikatu w pasku stanu (decyduje o kolorze).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StatusKind {
+    Info,
+    Success,
+    Error,
+}
+
+/// Szerokosc prawej kolumny (podglad, wyglad, akcje).
+const RESULT_PANEL_WIDTH: f32 = 400.0;
+
 pub struct QrGenApp {
     view: View,
+    /// Ostatnio uzywany format - wraca po przejsciu z Odczytu do Generuj.
+    last_format: FormatKind,
     forms: FormsState,
     appearance: Appearance,
 
@@ -145,6 +115,8 @@ pub struct QrGenApp {
     preview_dirty: bool,
     /// Komunikat zamiast podgladu (brak danych lub blad kodowania).
     preview_message: Option<(String, bool)>,
+    /// Informacja pod podgladem: wersja QR, liczba modulow, rozmiar pliku.
+    preview_info: Option<String>,
     /// Czy ostatnio zapisany plik odpowiada biezacym danym.
     saved_is_current: bool,
     last_saved_image: Option<PathBuf>,
@@ -166,8 +138,8 @@ pub struct QrGenApp {
 pub fn run_gui(job: Job, settings: Settings) {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1040.0, 720.0])
-            .with_min_inner_size([900.0, 560.0]),
+            .with_inner_size([1100.0, 800.0])
+            .with_min_inner_size([980.0, 640.0]),
         ..Default::default()
     };
 
@@ -187,12 +159,15 @@ pub fn run_gui(job: Job, settings: Settings) {
 impl QrGenApp {
     fn new(cc: &eframe::CreationContext<'_>, job: Job, settings: Settings) -> Self {
         let system_theme_light = Self::read_system_light(&cc.egui_ctx);
+        // Bez jawnego formatu otwieramy ostatnio uzywany (domyslnie vCard).
+        let initial_format = job
+            .format
+            .or(settings.last_format)
+            .unwrap_or(FormatKind::VCard);
 
         let mut app = Self {
-            view: match job.format {
-                Some(kind) => View::Form(kind),
-                None => View::Start,
-            },
+            view: View::Form(initial_format),
+            last_format: initial_format,
             forms: job.forms.clone(),
             appearance: job.appearance,
             output_dir: settings.output_dir.clone(),
@@ -204,6 +179,7 @@ impl QrGenApp {
             preview: None,
             preview_dirty: true,
             preview_message: None,
+            preview_info: None,
             saved_is_current: false,
             last_saved_image: None,
             last_saved_docx: None,
@@ -316,6 +292,9 @@ impl QrGenApp {
 
     fn switch_view(&mut self, view: View) {
         if self.view != view {
+            if let View::Form(kind) = view {
+                self.last_format = kind;
+            }
             self.view = view;
             self.invalidate_preview();
             self.status.clear();
@@ -374,6 +353,10 @@ impl QrGenApp {
     fn invalidate_preview(&mut self) {
         self.preview_dirty = true;
         self.saved_is_current = false;
+        // Komunikat "Zapisano..." dotyczy poprzedniej wersji danych.
+        if self.status.starts_with("Zapisano") {
+            self.status.clear();
+        }
     }
 
     /// Odswieza podglad na zywo, gdy dane sie zmienily. Renderuje w pamieci,
@@ -387,12 +370,14 @@ impl QrGenApp {
         let Some(kind) = self.active_format() else {
             self.preview = None;
             self.preview_message = None;
+            self.preview_info = None;
             return;
         };
         let payload = match self.forms.payload(kind) {
             Ok(p) => p,
             Err(_) => {
                 self.preview = None;
+                self.preview_info = None;
                 self.preview_message =
                     Some(("Wpisz dane, aby zobaczyć podgląd kodu.".to_string(), false));
                 return;
@@ -418,12 +403,32 @@ impl QrGenApp {
                     egui::TextureOptions::NEAREST,
                 ));
                 self.preview_message = None;
+                self.preview_info = Some(self.describe_code(&payload));
             }
             Err(e) => {
                 self.preview = None;
+                self.preview_info = None;
                 self.preview_message = Some((format!("Nie można utworzyć kodu: {e}"), true));
             }
         }
+    }
+
+    /// Opis kodu pod podgladem: wersja QR, liczba modulow i rozmiar pliku.
+    fn describe_code(&self, payload: &str) -> String {
+        let Ok(code) =
+            qrcode::QrCode::with_error_correction_level(payload.as_bytes(), self.appearance.ecc)
+        else {
+            return String::new();
+        };
+        let version = match code.version() {
+            qrcode::Version::Normal(n) | qrcode::Version::Micro(n) => n,
+        };
+        let modules = code.width() as u32;
+        let file = match crate::render::image_side(modules, &self.appearance) {
+            Ok((_, side)) => format!("plik {side}×{side} px"),
+            Err(e) => format!("plik: {e}"),
+        };
+        format!("Wersja {version} · {modules}×{modules} modułów · {file}")
     }
 
     /// Trwaly uchwyt do schowka - tworzony raz (na X11/Wayland natychmiastowe
@@ -510,72 +515,209 @@ impl QrGenApp {
         }
     }
 
+    fn current_mode(&self) -> Mode {
+        match self.view {
+            View::Decode => Mode::Decode,
+            View::Form(_) => Mode::Generate,
+        }
+    }
+
+    /// Pasek gorny: nazwa, przelacznik trybu (Generuj / Odczyt), Ustawienia.
     fn show_top_bar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            if ui
-                .selectable_label(self.view == View::Start, "🏠 Start")
-                .on_hover_text("Ekran startowy - wybór formatu")
-                .clicked()
-            {
-                self.switch_view(View::Start);
-            }
-            ui.separator();
-
-            for kind in FormatKind::ALL {
-                let selected = self.view == View::Form(kind);
-                let text = format!("{} {}", kind.icon(), kind.label());
-                if ui.selectable_label(selected, text).clicked() {
-                    self.switch_view(View::Form(kind));
-                }
-            }
-            ui.separator();
-            if ui
-                .selectable_label(self.view == View::Decode, "🔍 Odczyt QR")
-                .clicked()
-            {
-                self.switch_view(View::Decode);
-            }
-
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let settings_clicked = ui
-                    .selectable_label(self.settings_open, "⚙ Ustawienia")
-                    .clicked();
-                if settings_clicked {
-                    self.settings_open = !self.settings_open;
-                    if !self.settings_open {
-                        self.persist_settings();
+        let frame = egui::Frame::new()
+            .fill(ui.visuals().extreme_bg_color)
+            .inner_margin(egui::Margin::symmetric(20, 10));
+        egui::Panel::top("top_bar").frame(frame).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("qrgen").size(18.0).strong());
+                ui.add_space(12.0);
+                let mut mode = self.current_mode();
+                if widgets::segmented(
+                    ui,
+                    &mut mode,
+                    &[(Mode::Generate, "Generuj"), (Mode::Decode, "Odczyt")],
+                ) {
+                    match mode {
+                        Mode::Generate => self.switch_view(View::Form(self.last_format)),
+                        Mode::Decode => self.switch_view(View::Decode),
                     }
                 }
-
-                egui::ComboBox::from_id_salt("theme_mode_combo")
-                    .width(120.0)
-                    .selected_text(match self.theme_mode {
-                        ThemeMode::Auto => "Motyw: Auto",
-                        ThemeMode::Light => "Motyw: Jasny",
-                        ThemeMode::Dark => "Motyw: Ciemny",
-                    })
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.theme_mode, ThemeMode::Auto, "Auto (system)");
-                        ui.selectable_value(&mut self.theme_mode, ThemeMode::Light, "Jasny");
-                        ui.selectable_value(&mut self.theme_mode, ThemeMode::Dark, "Ciemny");
-                    });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add(
+                            egui::Button::new("Ustawienia")
+                                .selected(self.settings_open)
+                                .min_size(egui::vec2(0.0, 32.0)),
+                        )
+                        .clicked()
+                    {
+                        self.settings_open = !self.settings_open;
+                        if !self.settings_open {
+                            self.persist_settings();
+                        }
+                    }
+                });
             });
         });
     }
 
-    /// Widok formularza: responsywnie formularz + podglad obok siebie
-    /// (>= 680 px) albo jeden pod drugim.
-    fn show_format_view(&mut self, ui: &mut egui::Ui, kind: FormatKind) {
-        if ui.available_width() >= SIDE_BY_SIDE_MIN_WIDTH {
-            ui.columns(2, |columns| {
-                self.show_form_column(&mut columns[0], kind);
-                self.show_preview(&mut columns[1]);
-            });
+    /// Rodzaj komunikatu wywiedziony z tresci (bledy zaczynaja sie od "Błąd",
+    /// "Nie udało się" lub "Brak").
+    fn status_kind(&self) -> StatusKind {
+        let s = self.status.as_str();
+        if s.starts_with("Błąd") || s.starts_with("Nie udało") || s.starts_with("Brak") {
+            StatusKind::Error
+        } else if s.is_empty() {
+            StatusKind::Info
         } else {
-            self.show_form_column(ui, kind);
-            ui.add_space(18.0);
-            self.show_preview(ui);
+            StatusKind::Success
         }
+    }
+
+    /// Pasek stanu na dole okna: komunikat po lewej, akcje na plikach po prawej.
+    fn show_status_bar(&mut self, ui: &mut egui::Ui) {
+        let frame = egui::Frame::new()
+            .fill(ui.visuals().extreme_bg_color)
+            .inner_margin(egui::Margin::symmetric(20, 8));
+        let in_form = matches!(self.view, View::Form(_));
+        egui::Panel::bottom("status_bar")
+            .frame(frame)
+            .show(ui, |ui| {
+                let dark = ui.visuals().dark_mode;
+                let weak = ui.visuals().weak_text_color();
+                let (text, color) = match (self.status.is_empty(), self.status_kind()) {
+                    (true, _) if in_form => (self.target_path_hint(), weak),
+                    (true, _) => (String::new(), weak),
+                    (false, StatusKind::Success) => {
+                        (format!("✔ {}", self.status), theme::success(dark))
+                    }
+                    (false, StatusKind::Error) => {
+                        (format!("⚠ {}", self.status), ui.visuals().error_fg_color)
+                    }
+                    (false, StatusKind::Info) => (self.status.clone(), weak),
+                };
+                egui::Sides::new().shrink_left().truncate().show(
+                    ui,
+                    |ui| {
+                        ui.add(
+                            egui::Label::new(egui::RichText::new(text).color(color)).truncate(),
+                        );
+                    },
+                    |ui| {
+                        if in_form {
+                            self.show_file_links(ui);
+                        }
+                    },
+                );
+            });
+    }
+
+    /// Informacja, gdzie trafia zapisywane pliki (gdy brak innego komunikatu).
+    fn target_path_hint(&self) -> String {
+        let Some(kind) = self.active_format() else {
+            return String::new();
+        };
+        let stem = self.current_stem(kind);
+        let dir = output::resolve_full_path(&self.resolved_output_dir());
+        let mut text = format!(
+            "Pliki trafią do: {dir}{}{stem}.{}",
+            std::path::MAIN_SEPARATOR,
+            self.image_ext
+        );
+        if kind == FormatKind::VCard && self.docx_enabled {
+            text.push_str(&format!(" + {stem}.docx"));
+        }
+        text
+    }
+
+    /// Czysci formularz aktywnego formatu.
+    fn clear_current_form(&mut self, kind: FormatKind) {
+        match kind {
+            FormatKind::Text => self.forms.text = Default::default(),
+            FormatKind::Link => self.forms.link = Default::default(),
+            FormatKind::Email => self.forms.email = Default::default(),
+            FormatKind::VCard => self.forms.vcard = Default::default(),
+        }
+        self.invalidate_preview();
+        self.status = "Wyczyszczono formularz.".to_string();
+    }
+
+    /// Widok Generuj: lewa karta z formularzem, prawa kolumna z wynikiem.
+    fn show_generate_view(&mut self, ui: &mut egui::Ui, kind: FormatKind) {
+        let result_frame = egui::Frame::new()
+            .fill(ui.visuals().panel_fill)
+            .inner_margin(egui::Margin {
+            left: 0,
+            right: 20,
+            top: 20,
+            bottom: 20,
+        });
+        egui::Panel::right("result_panel")
+            .exact_size(RESULT_PANEL_WIDTH)
+            .resizable(false)
+            .show_separator_line(false)
+            .frame(result_frame)
+            .show(ui, |ui| self.show_result_panel(ui, kind));
+
+        let form_frame = egui::Frame::new()
+            .fill(ui.visuals().panel_fill)
+            .inner_margin(20);
+        egui::CentralPanel::default()
+            .frame(form_frame)
+            .show(ui, |ui| {
+                widgets::card(ui, |ui| {
+                    ui.set_min_size(ui.available_size());
+                    ui.horizontal(|ui| {
+                        let mut selected = kind;
+                        let options: Vec<(FormatKind, &str)> =
+                            FormatKind::ALL.iter().map(|k| (*k, k.label())).collect();
+                        if widgets::segmented(ui, &mut selected, &options) {
+                            self.switch_view(View::Form(selected));
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Wyczyść").clicked() {
+                                self.clear_current_form(kind);
+                            }
+                        });
+                    });
+                    ui.add_space(6.0);
+                    ui.separator();
+                    ui.add_space(6.0);
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            // Prawy margines na plywajacy pasek przewijania.
+                            egui::Frame::new()
+                                .inner_margin(egui::Margin {
+                                    right: 14,
+                                    ..Default::default()
+                                })
+                                .show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    match kind {
+                                        FormatKind::Text => self.show_text_form(ui),
+                                        FormatKind::Link => self.show_link_form(ui),
+                                        FormatKind::Email => self.show_email_form(ui),
+                                        FormatKind::VCard => self.show_vcard_form(ui),
+                                    }
+                                });
+                        });
+                });
+            });
+    }
+
+    /// Skroty klawiszowe: Ctrl/Cmd+S zapisuje kod (gdy zapis jest mozliwy).
+    fn handle_shortcuts(&mut self, ctx: &egui::Context) {
+        let pressed = ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::S));
+        if pressed && self.can_save() {
+            self.save();
+        }
+    }
+
+    /// Czy przycisk "Zapisz" jest aktywny: jest podglad, a plik jeszcze
+    /// nie odpowiada biezacym danym.
+    fn can_save(&self) -> bool {
+        matches!(self.view, View::Form(_)) && self.preview.is_some() && !self.saved_is_current
     }
 
     /// Okno deweloperskie (--debug-ui): "podglad ukladu" (debug-on-hover
@@ -620,41 +762,6 @@ impl QrGenApp {
             });
         self.debug_ui_open = open;
     }
-
-    /// Informacja pod formularzem, gdzie trafia wygenerowane pliki.
-    pub(super) fn show_target_path_hint(&mut self, ui: &mut egui::Ui) {
-        let Some(kind) = self.active_format() else {
-            return;
-        };
-        let stem = self.current_stem(kind);
-        let dir = output::resolve_full_path(&self.resolved_output_dir());
-        let mut text = format!(
-            "Zapis do: {dir}{}{stem}.{}",
-            std::path::MAIN_SEPARATOR,
-            self.image_ext
-        );
-        if kind == FormatKind::VCard && self.docx_enabled {
-            text.push_str(&format!(" + {stem}.docx"));
-        }
-        ui.add_space(4.0);
-        ui.label(egui::RichText::new(text).small().weak());
-    }
-
-    fn show_form_column(&mut self, ui: &mut egui::Ui, kind: FormatKind) {
-        match kind {
-            FormatKind::Text => self.show_text_form(ui),
-            FormatKind::Link => self.show_link_form(ui),
-            FormatKind::Email => self.show_email_form(ui),
-            FormatKind::VCard => self.show_vcard_form(ui),
-        }
-
-        ui.add_space(10.0);
-        self.show_actions(ui, kind);
-
-        ui.add_space(12.0);
-        ui.label(egui::RichText::new("Status").strong());
-        ui.label(&self.status);
-    }
 }
 
 impl eframe::App for QrGenApp {
@@ -662,18 +769,15 @@ impl eframe::App for QrGenApp {
         self.sync_theme(ui.ctx());
         self.handle_dropped_files(ui.ctx());
         self.refresh_preview(&ui.ctx().clone());
+        self.handle_shortcuts(ui.ctx());
 
         let ctx = ui.ctx().clone();
-        egui::CentralPanel::default().show(ui, |ui| {
-            self.show_top_bar(ui);
-            ui.separator();
-            ui.add_space(4.0);
-            egui::ScrollArea::vertical().show(ui, |ui| match self.view {
-                View::Start => self.show_start(ui),
-                View::Form(kind) => self.show_format_view(ui, kind),
-                View::Decode => self.show_decode_view(ui),
-            });
-        });
+        self.show_top_bar(ui);
+        self.show_status_bar(ui);
+        match self.view {
+            View::Form(kind) => self.show_generate_view(ui, kind),
+            View::Decode => self.show_decode_view(ui),
+        }
 
         self.show_settings_window(&ctx);
         self.show_debug_window(&ctx);

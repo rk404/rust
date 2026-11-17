@@ -28,7 +28,57 @@ fn percent_encode(s: &str) -> String {
     out
 }
 
+/// Odwrotnosc `percent_encode`: dekoduje %XX do bajtow UTF-8 (bledne ciagi
+/// zostawia bez zmian).
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            // `get` zamiast indeksowania: nie panikuje na granicy znaku UTF-8.
+            if let Some(v) = s
+                .get(i + 1..i + 3)
+                .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+            {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 impl EmailForm {
+    /// Parsuje URI `mailto:` (np. odczytane z kodu QR) na pola formularza.
+    /// None, gdy tekst nie jest URI mailto.
+    pub fn parse_mailto(raw: &str) -> Option<EmailForm> {
+        let raw = raw.trim();
+        let rest = raw
+            .get(..7)
+            .filter(|head| head.eq_ignore_ascii_case("mailto:"))
+            .map(|_| &raw[7..])?;
+        let (to, query) = rest.split_once('?').unwrap_or((rest, ""));
+        let mut form = EmailForm {
+            to: percent_decode(to),
+            ..Default::default()
+        };
+        for pair in query.split('&') {
+            let Some((key, value)) = pair.split_once('=') else {
+                continue;
+            };
+            match key.to_ascii_lowercase().as_str() {
+                "subject" => form.subject = percent_decode(value),
+                "body" => form.body = percent_decode(value).replace("\r\n", "\n"),
+                _ => {}
+            }
+        }
+        Some(form)
+    }
+
     pub fn payload(&self) -> Result<String, String> {
         let to = self.to.trim();
         if to.is_empty() {
@@ -56,6 +106,28 @@ impl EmailForm {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mailto_roundtrip_through_parse() {
+        let form = EmailForm {
+            to: "jan@firma.pl".into(),
+            subject: "Oferta: żółć & co".into(),
+            body: "Dzień dobry,\nPozdrawiam".into(),
+        };
+        let parsed = EmailForm::parse_mailto(&form.payload().unwrap()).unwrap();
+        assert_eq!(parsed.to, form.to);
+        assert_eq!(parsed.subject, form.subject);
+        assert_eq!(parsed.body, form.body);
+        assert!(EmailForm::parse_mailto("https://firma.pl").is_none());
+        assert_eq!(EmailForm::parse_mailto("MAILTO:a@b.pl").unwrap().to, "a@b.pl");
+    }
+
+    #[test]
+    fn percent_decode_survives_garbage() {
+        assert_eq!(percent_decode("100%"), "100%");
+        assert_eq!(percent_decode("%zz%41"), "%zzA");
+        assert_eq!(percent_decode("%ą"), "%ą");
+    }
 
     #[test]
     fn plain_address_only() {
