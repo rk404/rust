@@ -3,6 +3,7 @@ name = "qrgen_rust"
 version = "0.1.0"
 edition = "2021"
 default-run = "qrgen_rust"
+rust-version = "1.88"
 
 # GUI (na Windows bez konsoli) oraz wersja konsolowa dla ERP/skryptow.
 [[bin]]
