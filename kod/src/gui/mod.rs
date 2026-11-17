@@ -1,5 +1,6 @@
 mod actions;
 mod decode_view;
+mod fonts;
 mod form_email;
 mod form_link;
 mod form_text;
@@ -158,6 +159,7 @@ pub fn run_gui(job: Job, settings: Settings) {
 
 impl QrGenApp {
     fn new(cc: &eframe::CreationContext<'_>, job: Job, settings: Settings) -> Self {
+        fonts::install_system_font(&cc.egui_ctx);
         let system_theme_light = Self::read_system_light(&cc.egui_ctx);
         // Bez jawnego formatu otwieramy ostatnio uzywany (domyslnie vCard).
         let initial_format = job
