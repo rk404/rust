@@ -1,80 +1,48 @@
-use super::QrGenApp;
+use super::{widgets, QrGenApp};
 use crate::formats::FormatKind;
 use crate::platform;
 use eframe::egui;
 
-const BUTTON_SIZE: [f32; 2] = [152.0, 34.0];
-
-fn action_button(ui: &mut egui::Ui, label: &str, enabled: bool) -> bool {
-    let button = egui::Button::new(egui::RichText::new(label).size(15.0))
-        .min_size(egui::vec2(BUTTON_SIZE[0], BUTTON_SIZE[1]));
-    ui.add_enabled(enabled, button).clicked()
-}
-
 impl QrGenApp {
-    /// Wspolny wiersz akcji pod kazdym formularzem.
-    pub(super) fn show_actions(&mut self, ui: &mut egui::Ui, kind: FormatKind) {
-        ui.group(|ui| {
-            ui.label("Akcje:");
-            ui.add_space(4.0);
-            egui::Grid::new("action_buttons")
-                .num_columns(3)
-                .spacing([8.0, 8.0])
-                .show(ui, |ui| {
-                    if action_button(ui, "💾 Zapisz", !self.saved_is_current && self.preview.is_some()) {
-                        self.save();
-                    }
-                    if action_button(ui, "📋 Kopiuj dane", true) {
-                        self.copy_data_to_clipboard(ui.ctx(), kind);
-                    }
-                    if action_button(ui, "🖼 Kopiuj obraz", true) {
-                        self.copy_image_to_clipboard(kind);
-                    }
-                    ui.end_row();
+    /// Odnosniki do plikow w pasku stanu: Otwórz folder, Otwórz plik, Drukuj.
+    /// Dodawane od prawej, wiec kolejnosc na ekranie jest odwrotna do kodu.
+    pub(super) fn show_file_links(&mut self, ui: &mut egui::Ui) {
+        let file_ready = self.saved_is_current
+            && self
+                .last_saved_image
+                .as_ref()
+                .map(|p| p.exists())
+                .unwrap_or(false);
 
-                    if action_button(ui, "🗁 Otwórz folder", true) {
-                        let dir = self
-                            .last_saved_image
-                            .as_ref()
-                            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-                            .unwrap_or_else(|| self.resolved_output_dir());
-                        match platform::open_path(&dir) {
-                            Ok(()) => self.status = "Otwarto katalog z plikami.".to_string(),
-                            Err(e) => self.status = e,
-                        }
+        if widgets::link_button(ui, "Drukuj", file_ready) {
+            if let Some(path) = self.last_saved_image.clone() {
+                match platform::print_file(&path) {
+                    Ok(()) => {
+                        self.status = format!("Wysłano zadanie drukowania: {}", path.display())
                     }
-
-                    let file_ready = self.saved_is_current
-                        && self
-                            .last_saved_image
-                            .as_ref()
-                            .map(|p| p.exists())
-                            .unwrap_or(false);
-
-                    if action_button(ui, "📄 Otwórz plik", file_ready) {
-                        if let Some(path) = self.last_saved_image.clone() {
-                            match platform::open_path(&path) {
-                                Ok(()) => {
-                                    self.status = format!("Otwarto plik: {}", path.display())
-                                }
-                                Err(e) => self.status = e,
-                            }
-                        }
-                    }
-
-                    if action_button(ui, "🖶 Drukuj", file_ready) {
-                        if let Some(path) = self.last_saved_image.clone() {
-                            match platform::print_file(&path) {
-                                Ok(()) => {
-                                    self.status =
-                                        format!("Wysłano zadanie drukowania: {}", path.display())
-                                }
-                                Err(e) => self.status = e,
-                            }
-                        }
-                    }
-                });
-        });
+                    Err(e) => self.status = e,
+                }
+            }
+        }
+        if widgets::link_button(ui, "Otwórz plik", file_ready) {
+            if let Some(path) = self.last_saved_image.clone() {
+                match platform::open_path(&path) {
+                    Ok(()) => self.status = format!("Otwarto plik: {}", path.display()),
+                    Err(e) => self.status = e,
+                }
+            }
+        }
+        if widgets::link_button(ui, "Otwórz folder", true) {
+            let dir = self
+                .last_saved_image
+                .as_ref()
+                .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+                .unwrap_or_else(|| self.resolved_output_dir());
+            match platform::open_path(&dir) {
+                Ok(()) => self.status = "Otwarto katalog z plikami.".to_string(),
+                Err(e) => self.status = e,
+            }
+        }
     }
 
     pub(super) fn copy_data_to_clipboard(&mut self, ctx: &egui::Context, kind: FormatKind) {

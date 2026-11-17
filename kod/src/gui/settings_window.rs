@@ -1,126 +1,37 @@
-use super::QrGenApp;
+use super::theme::ThemeMode;
+use super::{widgets, QrGenApp};
 use crate::output;
 use crate::platform;
-use crate::render::{self, Appearance};
 use eframe::egui;
-use qrcode::EcLevel;
 use std::path::PathBuf;
 
 impl QrGenApp {
-    /// Plywajace okno "Ustawienia": wyglad kodu + miejsce zapisu.
+    /// Plywajace okno "Ustawienia": zapis plikow i motyw. Wyglad kodu
+    /// (kolory, korekcja bledow, rozmiar) jest przy podgladzie.
     pub(super) fn show_settings_window(&mut self, ctx: &egui::Context) {
         if !self.settings_open {
             return;
         }
         let mut open = self.settings_open;
-        let mut changed = false;
 
         egui::Window::new("Ustawienia")
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
+            .default_width(460.0)
+            // Pod przyciskiem "Ustawienia", przy prawej krawedzi okna.
+            .anchor(egui::Align2::RIGHT_TOP, [-20.0, 64.0])
             .show(ctx, |ui| {
-                ui.label(egui::RichText::new("Rozmiar obrazu").strong());
-                ui.add_space(4.0);
-                egui::Grid::new("settings_size_grid")
-                    .num_columns(2)
-                    .spacing([12.0, 8.0])
-                    .show(ui, |ui| {
-                        ui.label("Docelowy bok obrazu:");
-                        changed |= ui
-                            .add(
-                                egui::DragValue::new(&mut self.appearance.target_px)
-                                    .range(0..=render::MAX_DIM)
-                                    .speed(25)
-                                    .suffix(" px"),
-                            )
-                            .changed();
-                        ui.end_row();
-
-                        ui.label("Skala (px na moduł):");
-                        let scale_active = self.appearance.target_px == 0;
-                        changed |= ui
-                            .add_enabled(
-                                scale_active,
-                                egui::DragValue::new(&mut self.appearance.scale)
-                                    .range(1..=render::MAX_SCALE),
-                            )
-                            .changed();
-                        ui.end_row();
-                    });
-                ui.label(
-                    egui::RichText::new(
-                        "0 px = rozmiar wynika ze skali. Przy zadanym boku skala jest dobierana \
-                         automatycznie; rzeczywisty rozmiar może być nieco mniejszy, bo każdy \
-                         moduł kodu musi mieć całkowitą liczbę pikseli.",
-                    )
-                    .small()
-                    .weak(),
-                );
-
-                ui.add_space(10.0);
-                ui.separator();
-                ui.label(egui::RichText::new("Wygląd kodu").strong());
-                ui.add_space(4.0);
-                egui::Grid::new("settings_appearance_grid")
-                    .num_columns(2)
-                    .spacing([12.0, 8.0])
-                    .show(ui, |ui| {
-                        ui.label("Ramka (moduły):");
-                        changed |= ui
-                            .add(
-                                egui::DragValue::new(&mut self.appearance.border)
-                                    .range(0..=render::MAX_BORDER),
-                            )
-                            .changed();
-                        ui.end_row();
-
-                        ui.label("Korekcja błędów:");
-                        let ecc_response = egui::ComboBox::from_id_salt("settings_ecc")
-                            .selected_text(render::ecc_to_letter(self.appearance.ecc))
-                            .show_ui(ui, |ui| {
-                                for level in [EcLevel::L, EcLevel::M, EcLevel::Q, EcLevel::H] {
-                                    changed |= ui
-                                        .selectable_value(
-                                            &mut self.appearance.ecc,
-                                            level,
-                                            render::ecc_to_letter(level),
-                                        )
-                                        .changed();
-                                }
-                            });
-                        changed |= ecc_response.response.changed();
-                        ui.end_row();
-
-                        ui.label("Kolor kodu:");
-                        changed |= ui.color_edit_button_srgb(&mut self.appearance.fill).changed();
-                        ui.end_row();
-
-                        ui.label("Kolor tła:");
-                        changed |= ui.color_edit_button_srgb(&mut self.appearance.back).changed();
-                        ui.end_row();
-                    });
-
-                if ui.button("Przywróć domyślny wygląd").clicked() {
-                    self.appearance = Appearance::default();
-                    changed = true;
-                }
-
-                ui.add_space(10.0);
-                ui.separator();
-                ui.label(egui::RichText::new("Zapis plików").strong());
-                ui.add_space(4.0);
-
-                ui.label("Katalog zapisu (pusty = Dokumenty):");
+                widgets::section_title(ui, "Zapis plików");
+                ui.label("Katalog zapisu (pusty = Dokumenty)");
                 ui.horizontal(|ui| {
-                    let width = (ui.available_width() - 102.0).max(160.0);
-                    changed |= ui
-                        .add_sized(
-                            [width, 26.0],
-                            egui::TextEdit::singleline(&mut self.output_dir),
-                        )
-                        .changed();
-                    if ui.button("Przeglądaj...").clicked() {
+                    let width = (ui.available_width() - 112.0).max(160.0);
+                    ui.add_sized(
+                        [width, 30.0],
+                        egui::TextEdit::singleline(&mut self.output_dir)
+                            .margin(egui::Margin::symmetric(8, 6)),
+                    );
+                    if ui.button("Przeglądaj…").clicked() {
                         let mut dialog = rfd::FileDialog::new();
                         let current = PathBuf::from(self.output_dir.trim());
                         if current.is_dir() {
@@ -130,49 +41,42 @@ impl QrGenApp {
                         }
                         if let Some(dir) = dialog.pick_folder() {
                             self.output_dir = dir.display().to_string();
-                            changed = true;
                         }
                     }
                 });
 
                 egui::Grid::new("settings_output_grid")
                     .num_columns(2)
-                    .spacing([12.0, 8.0])
+                    .spacing([16.0, 10.0])
                     .show(ui, |ui| {
-                        ui.label("Nazwa pliku (poza vCard):");
-                        changed |= ui
-                            .add_sized(
-                                [140.0, 24.0],
-                                egui::TextEdit::singleline(&mut self.file_stem),
-                            )
-                            .changed();
+                        ui.label("Nazwa pliku (poza vCard)");
+                        ui.add_sized(
+                            [160.0, 30.0],
+                            egui::TextEdit::singleline(&mut self.file_stem)
+                                .margin(egui::Margin::symmetric(8, 6)),
+                        );
                         ui.end_row();
 
-                        ui.label("Format obrazu:");
-                        egui::ComboBox::from_id_salt("settings_ext")
-                            .selected_text(self.image_ext.to_uppercase())
-                            .show_ui(ui, |ui| {
-                                for ext in ["jpg", "png", "bmp"] {
-                                    changed |= ui
-                                        .selectable_value(
-                                            &mut self.image_ext,
-                                            ext.to_string(),
-                                            ext.to_uppercase(),
-                                        )
-                                        .changed();
-                                }
-                            });
+                        ui.label("Format obrazu");
+                        let mut ext: &'static str = match self.image_ext.as_str() {
+                            "png" => "png",
+                            "bmp" => "bmp",
+                            _ => "jpg",
+                        };
+                        if widgets::segmented(
+                            ui,
+                            &mut ext,
+                            &[("jpg", "JPG"), ("png", "PNG"), ("bmp", "BMP")],
+                        ) {
+                            self.image_ext = ext.to_string();
+                        }
                         ui.end_row();
                     });
 
-                changed |= ui
-                    .checkbox(
-                        &mut self.overwrite,
-                        "Nadpisuj istniejące pliki (bez dopisku _2, _3, ...)",
-                    )
-                    .changed();
-
-                ui.add_space(6.0);
+                ui.checkbox(
+                    &mut self.overwrite,
+                    "Nadpisuj istniejące pliki (bez dopisku _2, _3, …)",
+                );
                 ui.label(
                     egui::RichText::new(format!(
                         "Pliki trafią do: {}",
@@ -181,11 +85,21 @@ impl QrGenApp {
                     .small()
                     .weak(),
                 );
+
+                ui.add_space(8.0);
+                ui.separator();
+                widgets::section_title(ui, "Motyw");
+                widgets::segmented(
+                    ui,
+                    &mut self.theme_mode,
+                    &[
+                        (ThemeMode::Auto, "Auto (system)"),
+                        (ThemeMode::Light, "Jasny"),
+                        (ThemeMode::Dark, "Ciemny"),
+                    ],
+                );
             });
 
-        if changed {
-            self.invalidate_preview();
-        }
         if !open && self.settings_open {
             // Zamkniecie okna zapisuje ustawienia od razu.
             self.settings_open = false;
